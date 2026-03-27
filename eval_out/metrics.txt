@@ -1,0 +1,18 @@
+[Baseline SIFT(original) -> SIFT(distorted)]
+Original keypoints (SIFT): 1703
+Distorted keypoints: 1881
+Total matches: 715
+True-positive matches: 676
+Recoverable original points: 1089/1703
+Precision: 0.945455
+Recall: 0.620753
+
+[SIFT(original) -> original sRD-SIFT(distorted)]
+Original keypoints (SIFT): 1703
+Distorted keypoints: 1152
+Total matches: 0
+True-positive matches: 0
+Recoverable original points: 739/1703
+Precision: 0.000000
+Recall: 0.000000
+
