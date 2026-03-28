@@ -4,7 +4,7 @@ import cv2
 import math
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
-from sift import SIFT
+from srd_sift import SIFT
 
 Array = np.ndarray
 
@@ -121,6 +121,25 @@ def generate_distorted_image(
         borderMode=cv2.BORDER_REFLECT101,
     )
     return distorted, center, float(norm_scale)
+
+img = cv2.imread("input.jpg")
+gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+xi = -2
+
+dist_gray, _, _ = generate_distorted_image(gray, xi)
+
+cv2.imshow('SIFT Keypoints', dist_gray)
+cv2.waitKey(0)
+cv2.destroyAllWindows()
+
+gray = gray[::2, ::2]
+
+dist_gray, _, _ = generate_distorted_image(gray, xi)
+
+cv2.imshow('SIFT Keypoints', dist_gray)
+cv2.waitKey(0)
+cv2.destroyAllWindows()
 
 # img = cv2.imread("input.jpg")
 # test = generate_distorted_image(img, 0.1)[0]

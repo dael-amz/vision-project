@@ -139,7 +139,7 @@ class D_MATCHER():
 
         scales = self.compare_scale(dist_frame_origin_scales, distorted_scales)
 
-        c_matrix = (norms <= self.pos_thresh) & scales
+        c_matrix = (norms <= self.pos_thresh) #& scales
         self.M_true = self.matches[c_matrix]
 
         return self.M_true
