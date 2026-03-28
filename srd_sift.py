@@ -300,6 +300,7 @@ class SIFT(FeatureDetector, DescriptorExtractor):
         self.flat_kernels = None
         self.r2_maps = None
         self.norm_scale = None
+        self.sigmas_from_base = None
 
     @property
     def deltas(self):
@@ -351,10 +352,17 @@ class SIFT(FeatureDetector, DescriptorExtractor):
 
         for o in range(self.n_octaves):
             for s in range(1, self.n_scales + 3):
-                sigma_from_base[o, s] = math.sqrt(
+                sigma_abs = math.sqrt(
                     max(sigmas[o, s] ** 2 - sigmas[o, 0] ** 2, 0.0)
                 )
+                sigma_from_base[o, s] = sigma_abs / self.deltas[o]
+        
+        self.sigmas_from_base = sigma_from_base
         print(sigma_from_base)
+
+        var_diff = np.diff(sigmas * sigmas, axis=1)
+        gaussian_sigmas = np.sqrt(var_diff) / self.deltas[:, np.newaxis]
+
 
         def kernel1d(s):
             s = max(float(s), 1e-12)
@@ -409,6 +417,7 @@ class SIFT(FeatureDetector, DescriptorExtractor):
                 (self.n_scales + 3,) + image.shape, dtype=self.float_dtype, order='C'
             )
 
+        #octave[0] = image
         oi = 0
 
         r2_map = self.r2_maps[idx]
@@ -421,6 +430,9 @@ class SIFT(FeatureDetector, DescriptorExtractor):
 
 
         for kernel in tqdm(self.kernels[idx].values()):
+        # for s_idx in range(1, self.n_scales + 3):
+        #     sigma = self.sigmas_from_base[idx, s_idx]
+        #     octave[s_idx] = ndi.gaussian_filter(image, sigma=sigma, mode='reflect')
             new_image = np.zeros_like(image)
             blurred = np.zeros_like(image)
 
@@ -439,7 +451,7 @@ class SIFT(FeatureDetector, DescriptorExtractor):
                     right = min(r_row, rad_ker+1)
 
                     kslice = ker[rad_ker - left: rad_ker + right]
-                    convolved = ndi.convolve1d(row, ker)[j]#np.dot(row[j - left: j + right], kslice) / np.sum(kslice)
+                    convolved = np.dot(row[j - left: j + right], kslice) / np.sum(kslice)
                     new_image[i,j] = convolved
             for k in range(h):
                 for m in range(w):
@@ -456,12 +468,13 @@ class SIFT(FeatureDetector, DescriptorExtractor):
                     right = min(r_row, rad_ker+1)
 
                     kslice = ker[rad_ker - left: rad_ker + right]
-                    convolved = ndi.convolve1d(row, ker)[k]#np.dot(row[k - left: k + right], kslice) / np.sum(kslice)
+                    convolved = np.dot(row[k - left: k + right], kslice) / np.sum(kslice)
 
                     blurred[k,m] = convolved
 
             octave[oi] = blurred
             oi += 1
+            #image = blurred
         
         return octave
 
