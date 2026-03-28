@@ -7,7 +7,7 @@ from skimage.feature import SIFT, match_descriptors
 rd_desc = srd_sift()
 desc = SIFT()
 
-xi = 0
+xi = -0.5
 
 image = cv2.imread("input.jpg")
 gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)

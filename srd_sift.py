@@ -346,9 +346,6 @@ class SIFT(FeatureDetector, DescriptorExtractor):
         # for exact-paper construction from octave base:
         # use blur-from-base sigmas, not incremental sigmas
         sigma_from_base = np.zeros_like(sigmas)
-        # sigma_from_base[:, 0] = self.upsampling * math.sqrt(
-        #     self.sigma_min**2 - self.sigma_in**2
-        # )
 
         for o in range(self.n_octaves):
             for s in range(1, self.n_scales + 3):
@@ -358,10 +355,6 @@ class SIFT(FeatureDetector, DescriptorExtractor):
                 sigma_from_base[o, s] = sigma_abs / self.deltas[o]
         
         self.sigmas_from_base = sigma_from_base
-        print(sigma_from_base)
-
-        var_diff = np.diff(sigmas * sigmas, axis=1)
-        gaussian_sigmas = np.sqrt(var_diff) / self.deltas[:, np.newaxis]
 
 
         def kernel1d(s):
@@ -371,7 +364,7 @@ class SIFT(FeatureDetector, DescriptorExtractor):
             k = np.exp(-(x * x) / (2.0 * s * s))
             return k / k.sum()
 
-        kernels = {}
+        kernels = []
         flat_kernels = {}
         r2_maps = []
 
@@ -384,24 +377,32 @@ class SIFT(FeatureDetector, DescriptorExtractor):
             norm_scale_octave = self.norm_scale / (2 ** o)
 
             yy, xx = np.indices((ho, wo), dtype=np.float64)
-            r2_map = (((xx - cxo) ** 2 + (yy - cyo) ** 2) / norm_scale_octave**2).astype(np.int64)
-            r2_maps.append(r2_map)
+            r2_norm = (((xx - cxo) ** 2 + (yy - cyo) ** 2) / norm_scale_octave**2)
+            n_r_bins = 256
+            r2_max = float(r2_norm.max())
+            r2_bin = np.floor(r2_norm * (n_r_bins - 1) / r2_max).astype(np.int32)
+            r2_maps.append(r2_bin)
 
-            unique_r2 = np.unique(r2_map)
-            kernels[o] = {}
+            unique_r2 = np.unique(r2_bin)
+            #kernels[o].append([])
+            octave_kernels = []
 
-            for s in sigma_from_base[o]:
-                s = float(s)
-                kernels[o][s] = {}
-                flat_kernels.setdefault(s, {})
+            for s_idx in range(self.n_scales + 3):
+                s = float(sigma_from_base[o][s_idx])
+                scale_kernels = [None] * n_r_bins
+                #kernels[o].append([])
+                #flat_kernels.setdefault(s, {})
 
                 for r2 in unique_r2:
-                    if r2 not in flat_kernels[s]:
-                        sigma_r = s * abs(1.0 + xi * r2)
-                        flat_kernels[s][r2] = kernel1d(sigma_r)
-                    kernels[o][s][r2] = flat_kernels[s][r2]
+                    #if r2 not in flat_kernels[s]:
+                    r_val = r2 * r2_max / (n_r_bins - 1)
+                    sigma_r = s * abs(1.0 + xi * r_val)
+                    scale_kernels[r2] = (kernel1d(sigma_r))
+                    #kernels[o][s][r2] = flat_kernels[s][r2]
+                octave_kernels.append(scale_kernels)
+            kernels.append(octave_kernels)
         
-        self.flat_kernels = flat_kernels
+        #self.flat_kernels = flat_kernels
         self.kernels = kernels
         self.r2_maps = r2_maps
 
@@ -409,7 +410,7 @@ class SIFT(FeatureDetector, DescriptorExtractor):
         # key2 = list(kernels[0][key].keys())[10000]
         # print(kernels[0][key][0], kernels[0][key][key2])
 
-        return flat_kernels, kernels, r2_maps
+        return kernels, r2_maps
 
     def _apply_kernels(self, image, idx, granularity):
 
@@ -418,9 +419,10 @@ class SIFT(FeatureDetector, DescriptorExtractor):
             )
 
         #octave[0] = image
-        oi = 0
+        #oi = 0
 
         r2_map = self.r2_maps[idx]
+        r2_unique = np.unique(r2_map)
         rad_max = np.max(r2_map)
 
         h, w = image.shape
@@ -429,51 +431,60 @@ class SIFT(FeatureDetector, DescriptorExtractor):
         cy0 = (h - 1) / 2.0
 
 
-        for kernel in tqdm(self.kernels[idx].values()):
-        # for s_idx in range(1, self.n_scales + 3):
+        #for kernel in tqdm(self.kernels[idx].values()):
+        for s_idx in tqdm(range(0, self.n_scales + 3)):
         #     sigma = self.sigmas_from_base[idx, s_idx]
         #     octave[s_idx] = ndi.gaussian_filter(image, sigma=sigma, mode='reflect')
+            kernel = self.kernels[idx][s_idx]
             new_image = np.zeros_like(image)
             blurred = np.zeros_like(image)
+            for r2 in r2_unique:
+                ker = kernel[r2]
+                mask = (r2_map == r2)
+                new_image += ndi.convolve1d(image, ker, axis = 1, mode = 'reflect') * mask
+            for r2 in r2_unique:
+                ker = kernel[r2]
+                mask = (r2_map == r2)
+                blurred += ndi.convolve1d(new_image, ker, axis = 0, mode = 'reflect') * mask
 
-            for i in range(h):
-                for j in range(w):
-                    t = cx0 - i
-                    row = image[i]
-                    r2 = (r2_map[i,j])
-                    ker = kernel[r2]
-                    rad_ker = len(ker) // 2
+            # for i in range(h):
+            #     for j in range(w):
+            #         t = cx0 - i
+            #         row = image[i]
+            #         r2 = (r2_map[i,j])
+            #         ker = kernel[r2]
+            #         rad_ker = len(ker) // 2
 
-                    l_row = j
-                    r_row = w - j - 1
+            #         l_row = j
+            #         r_row = w - j - 1
 
-                    left = min(l_row, rad_ker)
-                    right = min(r_row, rad_ker+1)
+            #         left = min(l_row, rad_ker)
+            #         right = min(r_row, rad_ker+1)
 
-                    kslice = ker[rad_ker - left: rad_ker + right]
-                    convolved = np.dot(row[j - left: j + right], kslice) / np.sum(kslice)
-                    new_image[i,j] = convolved
-            for k in range(h):
-                for m in range(w):
-                    t = cy0 - m
-                    row = new_image[:, m]
-                    r2 = (r2_map[k,m])
-                    ker = kernel[r2]
-                    rad_ker = len(ker) // 2
+            #         kslice = ker[rad_ker - left: rad_ker + right]
+            #         convolved = ndi.convolve1d(row, ker)[j]#np.dot(row[j - left: j + right], kslice) / np.sum(kslice)
+            #         new_image[i,j] = convolved
+            # for k in range(h):
+            #     for m in range(w):
+            #         t = cy0 - m
+            #         row = new_image[:, m]
+            #         r2 = (r2_map[k,m])
+            #         ker = kernel[r2]
+            #         rad_ker = len(ker) // 2
 
-                    l_row = k
-                    r_row = h - k - 1
+            #         l_row = k
+            #         r_row = h - k - 1
 
-                    left = min(l_row, rad_ker)
-                    right = min(r_row, rad_ker+1)
+            #         left = min(l_row, rad_ker)
+            #         right = min(r_row, rad_ker+1)
 
-                    kslice = ker[rad_ker - left: rad_ker + right]
-                    convolved = np.dot(row[k - left: k + right], kslice) / np.sum(kslice)
+            #         kslice = ker[rad_ker - left: rad_ker + right]
+            #         convolved = ndi.convolve1d(row, ker)[k]#np.dot(row[k - left: k + right], kslice) / np.sum(kslice)
 
-                    blurred[k,m] = convolved
+            #         blurred[k,m] = convolved
 
-            octave[oi] = blurred
-            oi += 1
+            octave[s_idx] = blurred
+            #oi += 1
             #image = blurred
         
         return octave
