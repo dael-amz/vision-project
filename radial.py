@@ -88,58 +88,130 @@ class DistortionModel:
         return J
 
 
+import numpy as np
+import cv2
+from typing import Optional, Tuple
+
+Array = np.ndarray
+
+
 def generate_distorted_image(
-    image: Array,
+    image: np.array,
     xi: float,
     center: Optional[Tuple[float, float]] = None,
     norm_scale: Optional[float] = None,
     interpolation: int = cv2.INTER_CUBIC,
-) -> Tuple[Array, Tuple[float, float], float]:
+    border_mode: int = cv2.BORDER_REFLECT101,
+) -> Tuple[np.array, Tuple[float, float], float]:
+    """
+    Generate a radially distorted image using the same division model as
+    the sRD-SIFT paper.
+
+    Model in normalized coordinates:
+        u = x / (1 + xi * r_d^2)
+        v = y / (1 + xi * r_d^2)
+
+    where:
+        (x, y) = distorted normalized coordinates
+        (u, v) = undistorted normalized coordinates
+        r_d^2 = x^2 + y^2
+
+    This function uses backward warping:
+    for each distorted output pixel, compute the corresponding undistorted
+    source coordinate and sample from the input image.
+
+    Parameters
+    ----------
+    image : ndarray
+        Input undistorted image, grayscale or color.
+    xi : float
+        Division-model radial distortion parameter.
+        In the paper, typical radial compression corresponds to xi < 0.
+    center : (cx, cy), optional
+        Distortion center in pixel coordinates.
+        Defaults to the image center.
+    norm_scale : float, optional
+        Normalization scale for coordinates.
+        Defaults to max(h, w) * 0.5.
+    interpolation : OpenCV interpolation flag
+    border_mode : OpenCV border mode
+
+    Returns
+    -------
+    distorted : ndarray
+        Distorted output image.
+    center : tuple
+        Distortion center used.
+    norm_scale : float
+        Coordinate normalization scale used.
+    """
     h, w = image.shape[:2]
+
     if center is None:
         center = ((w - 1) * 0.5, (h - 1) * 0.5)
     if norm_scale is None:
         norm_scale = max(h, w) * 0.5
 
+    cx, cy = center
+    s = float(norm_scale)
+
+    # Grid of output distorted-image pixel centers
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
-    xd = (xx - center[0]) / norm_scale
-    yd = (yy - center[1]) / norm_scale
+
+    # Distorted normalized coordinates
+    xd = (xx - cx) / s
+    yd = (yy - cy) / s
     rd2 = xd * xd + yd * yd
 
-    inv_scale = 2.0 / (1.0 + np.sqrt(1 - 4 * xi * rd2))
-    xu = xd * inv_scale
-    yu = yd * inv_scale
+    # Inverse division model from distorted -> undistorted
+    denom = 1.0 + xi * rd2
 
-    map_x = xu * norm_scale + center[0]
-    map_y = yu * norm_scale + center[1]
+    # Avoid division near singularities
+    eps = 1e-8
+    valid = np.abs(denom) > eps
+
+    xu = np.empty_like(xd, dtype=np.float32)
+    yu = np.empty_like(yd, dtype=np.float32)
+
+    xu[valid] = xd[valid] / denom[valid]
+    yu[valid] = yd[valid] / denom[valid]
+
+    # For invalid points, send sampling outside image so remap fills from border mode
+    xu[~valid] = 1e9
+    yu[~valid] = 1e9
+
+    # Back to pixel coordinates in the undistorted source image
+    map_x = xu * s + cx
+    map_y = yu * s + cy
 
     distorted = cv2.remap(
         image,
         map_x.astype(np.float32),
         map_y.astype(np.float32),
         interpolation=interpolation,
-        borderMode=cv2.BORDER_REFLECT101,
+        borderMode=border_mode,
     )
-    return distorted, center, float(norm_scale)
 
-img = cv2.imread("input.jpg")
-gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    return distorted, center, s
 
-xi = -2
+# img = cv2.imread("input.jpg")
+# gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-dist_gray, _, _ = generate_distorted_image(gray, xi)
+# xi = -0.1
 
-cv2.imshow('SIFT Keypoints', dist_gray)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
+# dist_gray, _, _ = generate_distorted_image(gray, xi)
 
-gray = gray[::2, ::2]
+# cv2.imshow('SIFT Keypoints', dist_gray)
+# cv2.waitKey(0)
+# cv2.destroyAllWindows()
 
-dist_gray, _, _ = generate_distorted_image(gray, xi)
+# gray = gray[::2, ::2]
 
-cv2.imshow('SIFT Keypoints', dist_gray)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
+# dist_gray, _, _ = generate_distorted_image(gray, xi)
+
+# cv2.imshow('SIFT Keypoints', dist_gray)
+# cv2.waitKey(0)
+# cv2.destroyAllWindows()
 
 # img = cv2.imread("input.jpg")
 # test = generate_distorted_image(img, 0.1)[0]

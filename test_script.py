@@ -4,48 +4,52 @@ from skimage.feature import SIFT, match_descriptors, plot_matched_features
 import radial
 import matplotlib.pyplot as plt
 from matching import Keypoints, D_MATCHER
+import numpy as np
+from joblib import Parallel, delayed
+from water_surface_simulator import WaterSurfaceSimulator
 
 img = cv2.imread("input.jpg")
 gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-xi = -0.1
 
-dist_gray, _, _ = radial.generate_distorted_image(gray, xi)
 
-cv2.imshow('SIFT Keypoints', gray)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
+# dist_r = np.max(dist_gray.shape)
+# r = np.max(gray.shape)
+
+# print("Distortion: ", 100 * (r - dist_r) / r)
+
+# cv2.imshow('SIFT Keypoints', dist_gray)
+# cv2.waitKey(0)
+# cv2.destroyAllWindows()
+
+# import numpy as np
+
+
+# import numpy as np
+
 
 import numpy as np
-
-
-import numpy as np
+from typing import Optional, Tuple, Literal
 
 
 def make_division_distortion_func(
-    xi,
-    image_shape,
-    center=None,
-    norm_scale=None,
-    scale_mode="radial",
+    xi: float,
+    image_shape: Tuple[int, int],
+    center: Optional[Tuple[float, float]] = None,
+    norm_scale: Optional[float] = None,
+    scale_mode: Literal["none", "srd"] = "srd",
 ):
     """
-    Build distortion_func(origin_loc, origin_scales) that matches
-    generate_distorted_image(...).
+    Build a function that maps undistorted keypoints to distorted keypoints
+    under the same normalized division model used in the paper.
 
-    Parameters
-    ----------
-    xi : float
-        Division-model parameter.
-    image_shape : tuple
-        Image shape, e.g. gray.shape
-    center : tuple or None
-        Distortion center. If None, uses image center exactly like generate_distorted_image.
-    norm_scale : float or None
-        Coordinate normalization scale. If None, uses max(h, w) * 0.5,
-        exactly like generate_distorted_image.
-    scale_mode : str
-        "radial", "area", or "none"
+    Forward model:
+        x = f(u)
+          = 2u / (1 + sqrt(1 - 4 xi ||u||^2))
+
+    This is the paper's Eq. (3). The generator above uses Eq. (4) because
+    image synthesis needs backward warping, while evaluation of point
+    correspondences usually needs the forward map. :contentReference[oaicite:1]{index=1}
     """
     h, w = image_shape[:2]
 
@@ -55,46 +59,34 @@ def make_division_distortion_func(
         norm_scale = max(h, w) * 0.5
 
     cx, cy = center
+    s = float(norm_scale)
 
     def distortion_func(origin_loc, origin_scales):
-        origin_loc = np.asarray(origin_loc, dtype=float)
-        origin_scales = np.asarray(origin_scales, dtype=float)
+        origin_loc = np.asarray(origin_loc, dtype=np.float64)
+        origin_scales = np.asarray(origin_scales, dtype=np.float64)
 
-        # Normalize exactly like generate_distorted_image
-        xu = (origin_loc[:, 0] - cx) / norm_scale
-        yu = (origin_loc[:, 1] - cy) / norm_scale
-        ru2 = xu * xu + yu * yu
+        # origin_loc assumed in (x, y) = (col, row) pixel convention
+        uu = (origin_loc[:, 0] - cx) / s
+        vv = (origin_loc[:, 1] - cy) / s
+        ru2 = uu * uu + vv * vv
 
         inside = 1.0 - 4.0 * xi * ru2
-        sqrt_inside = np.sqrt(inside)
+        inside = np.maximum(inside, 0.0)
+        scale = 2.0 / (1.0 + np.sqrt(inside))
 
-        # Forward map: undistorted -> distorted
-        scale = 2.0 / (1.0 + sqrt_inside)
-        xd = xu * scale
-        yd = yu * scale
+        xd = uu * scale
+        yd = vv * scale
 
         distorted_loc = np.column_stack([
-            xd * norm_scale + cx,
-            yd * norm_scale + cy
+            xd * s + cx,
+            yd * s + cy,
         ])
 
-        # Scalar scale mapping
         if scale_mode == "none":
             distorted_scales = origin_scales.copy()
-
-        elif scale_mode == "radial":
-            # r_d = r_u * scale
-            # scale = 2 / (1 + sqrt(1 - 4 xi r_u^2))
-            # dr_d/dr_u = 2 / (sqrt_inside * (1 + sqrt_inside))
-            mag = 2.0 / (sqrt_inside * (1.0 + sqrt_inside))
-            distorted_scales = origin_scales * mag
-
-        elif scale_mode == "area":
-            tangential_mag = scale
-            radial_mag = 2.0 / (sqrt_inside * (1.0 + sqrt_inside))
-            area_mag = np.sqrt(np.abs(tangential_mag * radial_mag))
-            distorted_scales = origin_scales * area_mag
-
+        elif scale_mode == "srd":
+            # linear local scale factor used by the paper for repeatability correction
+            distorted_scales = origin_scales * (1.0 + xi * ru2)
         else:
             raise ValueError(f"Unknown scale_mode: {scale_mode}")
 
@@ -103,26 +95,91 @@ def make_division_distortion_func(
     return distortion_func
 
 
-desc_rd = srd_sift.SIFT()
-#xi = 0#-0.5 / 1000 * (gray.shape[0]**2 +gray.shape[1]**2)
-desc_rd._create_1d_gaussians(dist_gray.shape, xi)
-desc_rd.detect_and_extract(dist_gray, 1)
+h, w = gray.shape
+norm_scale = max(h, w) / 2
+rad = np.sqrt((h / 2)**2 + (w / 2)**2)
 
-keypoints1 = desc_rd.keypoints
-descriptors1 = desc_rd.descriptors
-scales1 = desc_rd.scales
-orientations1 = desc_rd.orientations
-distorted_kps = Keypoints(keypoints1[:, ::-1], descriptors1, scales1)
+def eval(amp):
+    xi = -0.09
+    results = np.zeros(7)
 
-desc = SIFT()
-desc.detect_and_extract(gray)
-keypoints2 = desc.keypoints
-descriptors2 = desc.descriptors
-scales2 = desc.scales
-origin_kps = Keypoints(keypoints2[:, ::-1], descriptors2, scales2)
+    
+    sim = WaterSurfaceSimulator(gray, amplitude_range=(0.002 * amp, 0.02 * amp))
+    if (amp == 0):
+        WaterSurfaceSimulator(gray, n_waves=0)
 
-dist_func = make_division_distortion_func(xi=xi, image_shape=gray.shape)
+    effecitve_distortion =  amp#- 100 * xi * (rad / norm_scale)**2
+    #dist_gray, _, _ = radial.generate_distorted_image(gray, xi)
+    frames = sim.generate_frames()
+    dist_gray = frames[10]
+    time = 0.04 * 10
 
-matcher = D_MATCHER(origin_kps=origin_kps, distorted_kps=distorted_kps, scale_thresh=0.5, pos_thresh=3.0, distortion_func=dist_func)
-out = matcher.compute_stats()
-print(out)
+    dist_func = sim.make_distortion_func(t=time)
+
+    desc_rd = srd_sift.SIFT()
+    desc_rd._create_1d_gaussians(dist_gray.shape, xi)
+    (desc_rd._create_jacobians(gray.shape, xi))
+    desc_rd.detect_and_extract(dist_gray, 1)
+
+    keypoints1 = desc_rd.keypoints
+    descriptors1 = desc_rd.descriptors
+    scales1 = desc_rd.sigmas
+    orientations1 = desc_rd.orientations
+    print(np.unique(scales1))
+    distorted_kps = Keypoints(keypoints1[:, ::-1], descriptors1, scales1)
+
+    desc = SIFT()
+    desc.detect_and_extract(gray)
+    keypoints2 = desc.keypoints
+    descriptors2 = desc.descriptors
+    scales2 = desc.sigmas
+    print(np.unique(scales2))
+    origin_kps = Keypoints(keypoints2[:, ::-1], descriptors2, scales2)
+
+    desc.detect_and_extract(dist_gray)
+    keypoints3 = desc.keypoints
+    descriptors3 = desc.descriptors
+    scales3 = desc.sigmas
+    print(scales3)
+    s_kps = Keypoints(keypoints3[:, ::-1], descriptors3, scales3)
+
+    #dist_func = make_division_distortion_func(xi=xi, image_shape=gray.shape)
+
+    matcher = D_MATCHER(origin_kps=origin_kps, distorted_kps=distorted_kps, distortion_func=dist_func)
+    out = matcher.compute_stats()
+    results[0] = out['repeatability']
+    results[1] = out['recall']
+    results[2] = out['precision']
+
+    matcher = D_MATCHER(origin_kps=origin_kps, distorted_kps=s_kps, distortion_func=dist_func)
+    out = matcher.compute_stats()
+    results[3] = out['repeatability']
+    results[4] = out['recall']
+    results[5] = out['precision']
+
+    results[6] = effecitve_distortion
+
+    return results
+
+
+
+vals = np.arange(0, 90, 10)
+xis = vals / (- 100 * (rad / norm_scale)**2)
+
+amps = [0, 1, 2, 3, 4, 5, 6, 7, 8]
+
+results = np.zeros((2, len(vals)))
+
+i = 0
+
+results = Parallel(n_jobs=-1)(delayed(eval)(amp) for amp in amps)
+results = np.array(results).T
+print("rResults", results.T)
+
+plt.plot(results[6], results[0], label = f'sRD-SIFT ')
+plt.plot(results[6], results[3], label = f'SIFT ')
+plt.xlabel('distortion')
+plt.ylabel('repeatability')
+plt.title('sRD-SIFT vs SIFT')
+plt.legend()
+plt.show()

@@ -1,253 +1,303 @@
-from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import Callable, Optional, Tuple, Dict, Any
 import numpy as np
-from skimage.feature import match_descriptors
+import skimage.feature as features
 
 
-Array = np.ndarray
-
-
-@dataclass
 class Keypoints:
+    locations: np.ndarray
+    descriptors: np.ndarray
+    scales: np.ndarray
+
+    def __init__(self, locations, descriptors, scales):
+        self.locations = np.asarray(locations, dtype=np.float64)
+        self.descriptors = np.asarray(descriptors)
+        self.scales = np.asarray(scales, dtype=np.float64)
+
+    def loc(self):
+        return self.locations
+
+    def desc(self):
+        return self.descriptors
+
+    def sc(self):
+        return self.scales
+
+    def keypoint(self, index):
+        kp = {
+            "location": self.locations[index],
+            "descriptors": self.descriptors[index],
+            "scale": self.scales[index],
+        }
+        return kp
+
+
+def circle_iou_matrix(C1, R1, C2, R2, eps=1e-9):
     """
-    Minimal keypoint container.
+    Pairwise IoU between two sets of circles.
 
-    xy:    (N, 2) array of [x, y] positions
-    scale: (N,)   array of keypoint scales
-    desc:  (N, D) descriptors
+    Parameters
+    ----------
+    C1 : (N, 2) array
+    R1 : (N,) array
+    C2 : (M, 2) array
+    R2 : (M,) array
+
+    Returns
+    -------
+    iou : (N, M) array
     """
-    xy: Array
-    scale: Array
-    desc: Optional[Array] = None
+    C1 = np.asarray(C1, dtype=np.float64)
+    C2 = np.asarray(C2, dtype=np.float64)
+    R1 = np.asarray(R1, dtype=np.float64)
+    R2 = np.asarray(R2, dtype=np.float64)
+
+    diff = C1[:, None, :] - C2[None, :, :]
+    d = np.linalg.norm(diff, axis=2)   # (N, M)
+
+    r1 = R1[:, None]                   # (N, 1)
+    r2 = R2[None, :]                   # (1, M)
+
+    # Broadcast to full shape so boolean indexing works
+    r1_full = np.broadcast_to(r1, d.shape)
+    r2_full = np.broadcast_to(r2, d.shape)
+
+    iou = np.zeros_like(d, dtype=np.float64)
+
+    # Case 1: no overlap
+    no_overlap = d >= (r1_full + r2_full)
+
+    # Case 2: one circle fully inside the other
+    inside = d <= np.abs(r1_full - r2_full)
+    if np.any(inside):
+        r_min = np.minimum(r1_full, r2_full)
+        r_max = np.maximum(r1_full, r2_full)
+        inter = np.pi * r_min**2
+        union = np.pi * r_max**2
+        iou[inside] = (inter / (union + eps))[inside]
+
+    # Case 3: partial overlap
+    partial = ~(no_overlap | inside)
+    if np.any(partial):
+        d_p = d[partial]
+        r1_p = r1_full[partial]
+        r2_p = r2_full[partial]
+
+        arg1 = (d_p**2 + r1_p**2 - r2_p**2) / (2.0 * d_p * r1_p + eps)
+        arg2 = (d_p**2 + r2_p**2 - r1_p**2) / (2.0 * d_p * r2_p + eps)
+
+        arg1 = np.clip(arg1, -1.0, 1.0)
+        arg2 = np.clip(arg2, -1.0, 1.0)
+
+        alpha = np.arccos(arg1)
+        beta = np.arccos(arg2)
+
+        term = (
+            (-d_p + r1_p + r2_p)
+            * (d_p + r1_p - r2_p)
+            * (d_p - r1_p + r2_p)
+            * (d_p + r1_p + r2_p)
+        )
+        term = np.maximum(term, 0.0)
+
+        inter = r1_p**2 * alpha + r2_p**2 * beta - 0.5 * np.sqrt(term)
+        union = np.pi * r1_p**2 + np.pi * r2_p**2 - inter
+        iou[partial] = inter / (union + eps)
+
+    return iou
 
 
-def default_scale_consistency(
-    mapped_scale: Array,
-    ref_scale: Array,
-    log2_tol: float = 0.5,
-) -> Array:
-    """
-    True when scales differ by at most log2_tol octaves.
-    """
-    eps = 1e-12
-    return np.abs(np.log2((mapped_scale + eps) / (ref_scale + eps))) <= log2_tol
+class D_MATCHER:
+    distorted_kps: Keypoints
+    origin_kps: Keypoints
+    distortion_func: callable
+    matches: np.ndarray
+    s_true: np.ndarray
+    M_true: np.ndarray
 
+    def __init__(
+        self,
+        distorted_kps: Keypoints,
+        origin_kps: Keypoints,
+        distortion_func=lambda x, s: (x, s),
+        overlap_thresh: float = 0.7,
+        region_radius_factor: float = 1.0,
+    ):
+        """
+        Parameters
+        ----------
+        distorted_kps, origin_kps : Keypoints
+            Keypoints in distorted and undistorted images
+        distortion_func : callable
+            Maps undistorted keypoints into the distorted image frame:
+                distorted_loc, distorted_scales = distortion_func(origin_loc, origin_scales)
+        overlap_thresh : float
+            Minimum IoU to count as a repeatable detection. The paper uses > 70%.
+        region_radius_factor : float
+            Converts scale/sigma into region radius:
+                radius = region_radius_factor * scale
+            Keep this the same for both images.
+        """
+        self.distorted_kps = distorted_kps
+        self.origin_kps = origin_kps
+        self.distortion_func = distortion_func
+        self.overlap_thresh = float(overlap_thresh)
+        self.region_radius_factor = float(region_radius_factor)
 
-def greedy_unique_assignment(
-    query_idx: Array,
-    train_idx: Array,
-    score: Array,
-) -> Tuple[Array, Array, Array]:
-    """
-    Enforce one-to-one correspondences greedily by lowest score first.
-    Mostly useful for detector repeatability pairing.
-    """
-    order = np.argsort(score)
-    used_q = set()
-    used_t = set()
-    keep = []
+        self.matches = None
+        self.s_true = None
+        self.M_true = None
 
-    for k in order:
-        q = int(query_idx[k])
-        t = int(train_idx[k])
-        if q in used_q or t in used_t:
-            continue
-        used_q.add(q)
-        used_t.add(t)
-        keep.append(k)
+    def match_kp(self, max_ratio=0.8, cross_check=True):
+        origin_desc = self.origin_kps.desc()
+        distorted_desc = self.distorted_kps.desc()
 
-    keep = np.asarray(keep, dtype=int)
-    return query_idx[keep], train_idx[keep], score[keep]
+        self.matches = features.match_descriptors(
+            origin_desc,
+            distorted_desc,
+            cross_check=cross_check,
+            max_ratio=max_ratio,
+        )
+        return self.matches
 
+    @staticmethod
+    def unique_assignment(query_idx, train_idx, score, maximize=False):
+        """
+        Enforce one-to-one correspondences greedily.
 
-def compute_common_detections(
-    kp_distorted: Keypoints,
-    kp_original: Keypoints,
-    map_xy_and_scale_to_original: Callable[[Array, Array], Tuple[Array, Array]],
-    pos_tol: float = 3.0,
-    scale_log2_tol: float = 0.5,
-    enforce_one_to_one: bool = True,
-) -> Dict[str, Any]:
-    """
-    Approximate S_true using:
-      - mapped position consistency
-      - mapped scale consistency
-    """
-    xy_d = np.asarray(kp_distorted.xy, dtype=float)
-    sc_d = np.asarray(kp_distorted.scale, dtype=float)
-    xy_o = np.asarray(kp_original.xy, dtype=float)
-    sc_o = np.asarray(kp_original.scale, dtype=float)
+        If maximize=False, lower score is better.
+        If maximize=True, higher score is better.
+        """
+        order = np.argsort(score)
+        if maximize:
+            order = order[::-1]
 
-    mapped_xy, mapped_sc = map_xy_and_scale_to_original(xy_d, sc_d)
+        used_q = set()
+        used_t = set()
+        keep = []
 
-    disp = mapped_xy[:, None, :] - xy_o[None, :, :]
-    pos_dist = np.linalg.norm(disp, axis=2)
+        for k in order:
+            q = int(query_idx[k])
+            t = int(train_idx[k])
+            if q in used_q or t in used_t:
+                continue
+            used_q.add(q)
+            used_t.add(t)
+            keep.append(k)
 
-    sc_cons = default_scale_consistency(
-        mapped_sc[:, None],
-        sc_o[None, :],
-        log2_tol=scale_log2_tol,
-    )
+        keep = np.asarray(keep, dtype=int)
+        return query_idx[keep], train_idx[keep], score[keep]
 
-    valid = (pos_dist <= pos_tol) & sc_cons
-    rows, cols = np.nonzero(valid)
+    def _pairwise_overlap_candidates(self, one_to_one=True):
+        """
+        Compare:
+          predicted distorted regions from origin_kps
+        against:
+          detected distorted regions from distorted_kps
 
-    if len(rows) == 0:
-        denom = min(len(xy_d), len(xy_o))
-        return {
-            "S_true_count": 0,
-            "denominator": denom,
-            "repeatability": 0.0,
-            "distorted_indices": np.array([], dtype=int),
-            "original_indices": np.array([], dtype=int),
+        Returns
+        -------
+        pairs : (K, 2) int array
+            [origin_index, distorted_index]
+        scores : (K,) float array
+            IoU values for kept pairs
+        """
+        origin_loc = self.origin_kps.loc()
+        origin_scales = self.origin_kps.sc()
+
+        distorted_loc = self.distorted_kps.loc()
+        distorted_scales = self.distorted_kps.sc()
+
+        pred_loc, pred_scales = self.distortion_func(origin_loc, origin_scales)
+
+        pred_r = self.region_radius_factor * np.asarray(pred_scales, dtype=np.float64)
+        dist_r = self.region_radius_factor * np.asarray(distorted_scales, dtype=np.float64)
+
+        iou = circle_iou_matrix(pred_loc, pred_r, distorted_loc, dist_r)
+
+        rows, cols = np.where(iou >= self.overlap_thresh)
+        if len(rows) == 0:
+            return np.empty((0, 2), dtype=int), np.empty((0,), dtype=np.float64)
+
+        scores = iou[rows, cols]
+
+        if one_to_one:
+            rows, cols, scores = self.unique_assignment(
+                rows, cols, scores, maximize=True
+            )
+
+        pairs = np.column_stack((rows, cols))
+        return pairs, scores
+
+    def compute_s_true(self, one_to_one=True):
+        """
+        Compute S_true using paper-style region overlap instead of point distance.
+        """
+        self.s_true, _ = self._pairwise_overlap_candidates(one_to_one=one_to_one)
+        return self.s_true
+
+    def true_matches(self, one_to_one=True):
+        """
+        Compute M_true: descriptor matches that are also geometrically true
+        under the overlap criterion.
+        """
+        if self.matches is None:
+            raise RuntimeError("Call match_kp before true_matches.")
+
+        origin_idx = self.matches[:, 0]
+        distorted_idx = self.matches[:, 1]
+
+        origin_loc = self.origin_kps.loc()[origin_idx]
+        origin_scales = self.origin_kps.sc()[origin_idx]
+
+        distorted_loc = self.distorted_kps.loc()[distorted_idx]
+        distorted_scales = self.distorted_kps.sc()[distorted_idx]
+
+        pred_loc, pred_scales = self.distortion_func(origin_loc, origin_scales)
+
+        pred_r = self.region_radius_factor * np.asarray(pred_scales, dtype=np.float64)
+        dist_r = self.region_radius_factor * np.asarray(distorted_scales, dtype=np.float64)
+
+        # IoU only for already-matched pairs
+        iou = np.diag(circle_iou_matrix(pred_loc, pred_r, distorted_loc, dist_r))
+
+        keep = iou >= self.overlap_thresh
+        true_match_indices = np.where(keep)[0]
+
+        if len(true_match_indices) == 0:
+            self.M_true = np.empty((0, 2), dtype=int)
+            return self.M_true
+
+        if one_to_one:
+            # Usually match_descriptors already gives one-to-one with cross_check=True,
+            # but we keep this for safety.
+            rows = origin_idx[true_match_indices]
+            cols = distorted_idx[true_match_indices]
+            scores = iou[true_match_indices]
+
+            rows, cols, scores = self.unique_assignment(
+                rows, cols, scores, maximize=True
+            )
+            self.M_true = np.column_stack((rows, cols))
+        else:
+            self.M_true = self.matches[keep]
+
+        return self.M_true
+
+    def compute_stats(self, max_ratio=0.8, cross_check=True, one_to_one=True):
+        self.match_kp(max_ratio=max_ratio, cross_check=cross_check)
+        self.compute_s_true(one_to_one=one_to_one)
+        self.true_matches(one_to_one=one_to_one)
+
+        n_dist = len(self.distorted_kps.loc())
+        n_orig = len(self.origin_kps.loc())
+        n_min = min(n_dist, n_orig)
+        n_matches = len(self.matches)
+        n_s_true = len(self.s_true)
+        n_m_true = len(self.M_true)
+
+        result = {
+            "repeatability": (n_s_true / n_min) if n_min > 0 else 0.0,
+            "recall": (n_m_true / n_s_true) if n_s_true > 0 else 0.0,
+            "precision": (n_m_true / n_matches) if n_matches > 0 else 0.0,
         }
 
-    q_idx = rows.astype(int)
-    t_idx = cols.astype(int)
-    score = pos_dist[rows, cols]
-
-    if enforce_one_to_one:
-        q_idx, t_idx, score = greedy_unique_assignment(q_idx, t_idx, score)
-
-    denom = min(len(xy_d), len(xy_o))
-    repeatability = len(q_idx) / denom if denom > 0 else 0.0
-
-    return {
-        "S_true_count": len(q_idx),
-        "denominator": denom,
-        "repeatability": repeatability,
-        "distorted_indices": q_idx,
-        "original_indices": t_idx,
-    }
-
-
-def skimage_match(
-    desc_query: Array,
-    desc_train: Array,
-    *,
-    metric: Optional[str] = "euclidean",
-    p: int = 2,
-    max_distance: np.floating | float | None = np.inf,
-    cross_check: bool = True,
-    max_ratio: float = 0.8,
-) -> Tuple[Array, Array]:
-    """
-    Wrapper around skimage.feature.match_descriptors.
-
-    Returns:
-        query_idx, train_idx
-    """
-    desc_query = np.asarray(desc_query)
-    desc_train = np.asarray(desc_train)
-
-    if desc_query.ndim != 2 or desc_train.ndim != 2:
-        raise ValueError("Descriptors must be 2D arrays of shape (N, D).")
-    if desc_query.shape[1] != desc_train.shape[1]:
-        raise ValueError("Descriptor dimensionalities do not match.")
-
-    matches = match_descriptors(
-        desc_query,
-        desc_train,
-        metric=metric,
-        p=p,
-        max_distance=max_distance,
-        cross_check=cross_check,
-        max_ratio=max_ratio,
-    )
-
-    if matches.size == 0:
-        return np.array([], dtype=int), np.array([], dtype=int)
-
-    return matches[:, 0].astype(int), matches[:, 1].astype(int)
-
-
-def evaluate_matching(
-    kp_distorted: Keypoints,
-    kp_original: Keypoints,
-    map_xy_and_scale_to_original: Callable[[Array, Array], Tuple[Array, Array]],
-    *,
-    pos_tol: float = 3.0,
-    scale_log2_tol: float = 0.5,
-    metric: Optional[str] = "euclidean",
-    p: int = 2,
-    max_distance: np.floating | float | None = np.inf,
-    cross_check: bool = True,
-    max_ratio: float = 0.8,
-) -> Dict[str, Any]:
-    """
-    Compute:
-      - repeatability
-      - recall
-      - precision
-
-    using skimage.feature.match_descriptors for descriptor matching.
-    """
-    if kp_distorted.desc is None or kp_original.desc is None:
-        raise ValueError("Descriptors are required for recall/precision.")
-
-    common = compute_common_detections(
-        kp_distorted=kp_distorted,
-        kp_original=kp_original,
-        map_xy_and_scale_to_original=map_xy_and_scale_to_original,
-        pos_tol=pos_tol,
-        scale_log2_tol=scale_log2_tol,
-        enforce_one_to_one=True,
-    )
-    S_true_count = common["S_true_count"]
-
-    q_idx, t_idx = skimage_match(
-        kp_distorted.desc,
-        kp_original.desc,
-        metric=metric,
-        p=p,
-        max_distance=max_distance,
-        cross_check=cross_check,
-        max_ratio=max_ratio,
-    )
-
-    M_count = len(q_idx)
-
-    if M_count == 0:
-        return {
-            "repeatability": common["repeatability"],
-            "recall": 0.0,
-            "precision": 0.0,
-            "S_true_count": S_true_count,
-            "M_count": 0,
-            "M_true_count": 0,
-            "matches_query_idx": q_idx,
-            "matches_train_idx": t_idx,
-            "matches_correct_mask": np.array([], dtype=bool),
-        }
-
-    mapped_xy, mapped_sc = map_xy_and_scale_to_original(
-        kp_distorted.xy[q_idx],
-        kp_distorted.scale[q_idx],
-    )
-
-    pos_err = np.linalg.norm(mapped_xy - kp_original.xy[t_idx], axis=1)
-    sc_ok = default_scale_consistency(
-        mapped_sc,
-        kp_original.scale[t_idx],
-        log2_tol=scale_log2_tol,
-    )
-
-    correct = (pos_err <= pos_tol) & sc_ok
-    M_true_count = int(np.sum(correct))
-
-    recall = M_true_count / S_true_count if S_true_count > 0 else 0.0
-    precision = M_true_count / M_count if M_count > 0 else 0.0
-
-    return {
-        "repeatability": common["repeatability"],
-        "recall": recall,
-        "precision": precision,
-        "S_true_count": S_true_count,
-        "M_count": M_count,
-        "M_true_count": M_true_count,
-        "matches_query_idx": q_idx,
-        "matches_train_idx": t_idx,
-        "matches_correct_mask": correct,
-    }
+        return result

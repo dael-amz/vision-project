@@ -43,8 +43,8 @@ class D_MATCHER():
     def __init__(self,
                  distorted_kps: None,
                  origin_kps: None,
-                 scale_thresh: 0.5,
-                 pos_thresh: 3.0,
+                 scale_thresh = 0.5,
+                 pos_thresh = 3.0,
                  distortion_func = lambda x,y: (x,y)):
         
         self.distorted_kps = distorted_kps
@@ -139,7 +139,7 @@ class D_MATCHER():
 
         scales = self.compare_scale(dist_frame_origin_scales, distorted_scales)
 
-        c_matrix = (norms <= self.pos_thresh) & scales
+        c_matrix = (norms <= self.pos_thresh)# & scales
         self.M_true = self.matches[c_matrix]
 
         return self.M_true
