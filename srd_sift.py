@@ -269,6 +269,7 @@ class SIFT(FeatureDetector, DescriptorExtractor):
         lambda_descr=6,
         n_hist=4,
         n_ori=8,
+        use_jacobian_correction = True,
     ):
         if upsampling in [1, 2, 4]:
             self.upsampling = upsampling
@@ -303,7 +304,7 @@ class SIFT(FeatureDetector, DescriptorExtractor):
         self.sigmas_from_base = None
         self.r2_indicies = None
         self.jacobians = None
-        self.use_jacobian_correction = True
+        self.use_jacobian_correction = use_jacobian_correction
 
     @property
     def deltas(self):
@@ -468,6 +469,107 @@ class SIFT(FeatureDetector, DescriptorExtractor):
                     #if r2 not in flat_kernels[s]:
                     #r_val = r2 * r2_max / (n_bins - 1)
                     sigma_r = s * abs(1.0 + xi * unique_r2[r_idx])
+                    scale_kernels[r_idx] = (kernel1d(sigma_r))
+                    #kernels[o][s][r2] = flat_kernels[s][r2]
+                octave_kernels.append(scale_kernels)
+            kernels.append(octave_kernels)
+        
+        #self.flat_kernels = flat_kernels
+        self.kernels = kernels
+        self.r2_maps = r2_maps
+        self.r2_indicies = r2_indicies
+
+        # key = list(kernels[0].keys())[0]
+        # key2 = list(kernels[0][key].keys())[10000]
+        # print(kernels[0][key][0], kernels[0][key][key2])
+
+        return kernels, r2_maps
+    
+    def _create_1d_water_gaussians(self, image_shape, h, d, A, center = None, truncate = 4.0):
+
+        h, w = image_shape
+
+        # match the image size used by _create_scalespace
+        if self.upsampling > 1:
+            h = int(round(h * self.upsampling))
+            w = int(round(w * self.upsampling))
+
+        if center is None:
+            cx0 = (w - 1) / 2.0
+            cy0 = (h - 1) / 2.0
+        else:
+            cx0 = center[0] * self.upsampling
+            cy0 = center[1] * self.upsampling
+
+        self.norm_scale = max(h, w) / 2
+
+        # same sigma bookkeeping as skimage SIFT
+        tmp = np.power(2, np.arange(self.n_scales + 3) / self.n_scales) * self.sigma_min
+        sigmas = self.deltas[:, np.newaxis] / self.deltas[0] * tmp[np.newaxis, :]
+        self.scalespace_sigmas = (
+                self.deltas[:, np.newaxis] / self.deltas[0]
+            ) * tmp[np.newaxis, :]
+
+
+        # for exact-paper construction from octave base:
+        # use blur-from-base sigmas, not incremental sigmas
+        sigma_from_base = np.zeros_like(sigmas)
+
+        for o in range(self.n_octaves):
+            for s in range(1, self.n_scales + 3):
+                sigma_abs = math.sqrt(
+                    max(sigmas[o, s] ** 2 - sigmas[o, 0] ** 2, 0.0)
+                )
+                sigma_from_base[o, s] = sigma_abs / self.deltas[o]
+        
+        self.sigmas_from_base = sigma_from_base
+
+
+        def kernel1d(s):
+            s = max(float(s), 1e-12)
+            rad = max(1, int(truncate * s + 0.5))
+            x = np.arange(-rad, rad + 1, dtype=np.float64)
+            k = np.exp(-(x * x) / (2.0 * s * s))
+            return k / k.sum()
+
+        kernels = []
+        r2_maps = []
+        r2_indicies = []
+
+        for o in range(self.n_octaves):
+
+            ho = math.ceil(h / (2**o))
+            wo = math.ceil(w / (2**o))
+            cxo = cx0 / (2**o)
+            cyo = cy0 / (2**o)
+            norm_scale_octave = self.norm_scale / (2 ** o)
+
+            yy, xx = np.indices((ho, wo), dtype=np.float64)
+            r2_map = (((xx - cxo) ** 2 + (yy - cyo) ** 2) / norm_scale_octave**2)
+            #n_r_bins = 256
+            # r2_max = float(r2_map.max())
+            # r2_map = r2_map / r2_max
+            #r2_bin = np.floor(r2_norm * (n_bins - 1) / r2_max).astype(np.int32)
+            r2_maps.append(r2_map)
+
+            unique_r2, r2_index = np.unique(r2_map, return_inverse= True)
+            r2_index = r2_index.reshape(r2_map.shape)
+            r2_indicies.append(r2_index)
+            #kernels[o].append([])
+            octave_kernels = []
+
+            for s_idx in range(self.n_scales + 3):
+                s = float(sigma_from_base[o][s_idx])
+                scale_kernels = [None] * len(unique_r2)
+                #kernels[o].append([])
+                #flat_kernels.setdefault(s, {})
+
+                for r_idx in range(len(unique_r2)):
+                    #if r2 not in flat_kernels[s]:
+                    #r_val = r2 * r2_max / (n_bins - 1)
+                    lambda_1 = h + (d * A) / np.sqrt(1 + (1 - A**2) * unique_r2[r_idx])
+                    lambda_2 =  h + (d * A) / ((1 + (1 - A**2) * unique_r2[r_idx])**(3/2))
+                    sigma_r = s * np.sqrt(lambda_1 * lambda_2)
                     scale_kernels[r_idx] = (kernel1d(sigma_r))
                     #kernels[o][s][r2] = flat_kernels[s][r2]
                 octave_kernels.append(scale_kernels)

@@ -99,12 +99,18 @@ h, w = gray.shape
 norm_scale = max(h, w) / 2
 rad = np.sqrt((h / 2)**2 + (w / 2)**2)
 
+
 def eval(amp):
-    xi = -0.09
+    xi = -0.109
     results = np.zeros(7)
 
+    H = 1.0
+    d = 1.0
+    n_water = 1.3333
+    n_air = 1.0
+    A = n_air / n_water
     
-    sim = WaterSurfaceSimulator(gray, amplitude_range=(0.002 * amp, 0.02 * amp))
+    sim = WaterSurfaceSimulator(gray,h=H, d=d, f=1, amplitude_range=(0.002 * amp, 0.02 * amp))
     if (amp == 0):
         WaterSurfaceSimulator(gray, n_waves=0)
 
@@ -115,10 +121,11 @@ def eval(amp):
     time = 0.04 * 10
 
     dist_func = sim.make_distortion_func(t=time)
+    print("Progress 1")
 
     desc_rd = srd_sift.SIFT()
-    desc_rd._create_1d_gaussians(dist_gray.shape, xi)
-    (desc_rd._create_jacobians(gray.shape, xi))
+    desc_rd._create_1d_water_gaussians(dist_gray.shape, h=H, d=d, A=A)
+    #(desc_rd._create_jacobians(gray.shape, xi))
     desc_rd.detect_and_extract(dist_gray, 1)
 
     keypoints1 = desc_rd.keypoints
@@ -127,6 +134,7 @@ def eval(amp):
     orientations1 = desc_rd.orientations
     print(np.unique(scales1))
     distorted_kps = Keypoints(keypoints1[:, ::-1], descriptors1, scales1)
+    print("Progress 2")
 
     desc = SIFT()
     desc.detect_and_extract(gray)
@@ -135,6 +143,7 @@ def eval(amp):
     scales2 = desc.sigmas
     print(np.unique(scales2))
     origin_kps = Keypoints(keypoints2[:, ::-1], descriptors2, scales2)
+    print("Progress 3")
 
     desc.detect_and_extract(dist_gray)
     keypoints3 = desc.keypoints
@@ -142,6 +151,7 @@ def eval(amp):
     scales3 = desc.sigmas
     print(scales3)
     s_kps = Keypoints(keypoints3[:, ::-1], descriptors3, scales3)
+    print("Progress 4")
 
     #dist_func = make_division_distortion_func(xi=xi, image_shape=gray.shape)
 
@@ -172,7 +182,7 @@ results = np.zeros((2, len(vals)))
 
 i = 0
 
-results = Parallel(n_jobs=-1)(delayed(eval)(amp) for amp in amps)
+results = eval(amps[1])#Parallel(n_jobs=-1)(delayed(eval)(amp) for amp in amps)
 results = np.array(results).T
 print("rResults", results.T)
 
@@ -182,4 +192,6 @@ plt.xlabel('distortion')
 plt.ylabel('repeatability')
 plt.title('sRD-SIFT vs SIFT')
 plt.legend()
+print("Progress 5")
+
 plt.show()

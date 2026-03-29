@@ -12,7 +12,8 @@ xi = -0.5
 image = cv2.imread("input.jpg")
 gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-rd_desc._create_1d_gaussians(gray.shape, xi)
+rd_desc._create_1d_water_gaussians(gray.shape, h=1, d=1, A = 0.75)
+print("done")
 (rd_desc._create_jacobians(gray.shape, xi))
 #rd_scale = rd_desc._create_rd_scalespace(gray)
 
