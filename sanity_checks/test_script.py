@@ -1,7 +1,7 @@
 import cv2
 import srd_sift as srd_sift
 from skimage.feature import SIFT, match_descriptors, plot_matched_features
-import radial
+import Project.unused.radial as radial
 import matplotlib.pyplot as plt
 from matching import Keypoints, D_MATCHER
 import numpy as np

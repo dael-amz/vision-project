@@ -1,7 +1,7 @@
 import cv2
 import srd_sift as srd_sift
 from skimage.feature import SIFT, match_descriptors, plot_matched_features
-import radial
+import unused.radial as radial
 import matplotlib.pyplot as plt
 from matching import Keypoints, D_MATCHER
 import numpy as np
@@ -9,19 +9,21 @@ from joblib import Parallel, delayed
 from water_surface_simulator import WaterSurfaceSimulator
 import numpy as np
 from typing import Optional, Tuple, Literal
+from hpatches_images import image_list
+from tqdm import tqdm
 
 
 
-def eval(image, amp):
+def eval(gray, amp):
     # Load an image to evaluate
-    img = cv2.imread(image)
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    # img = cv2.imread(image)
+    # gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
     # Store the statistics of a given run
     results = np.zeros(7)
     
     # Create a water simulator with a distribution of waves of amplitude around amp
-    sim = WaterSurfaceSimulator(gray, amplitude_range=(0.7 * amp, 1.3 * amp))
+    sim = WaterSurfaceSimulator(gray, d=1.333, amplitude_range=(0.7 * amp, 1.3 * amp))
     if (amp == 0):
         WaterSurfaceSimulator(gray, n_waves=0)
 
@@ -74,13 +76,14 @@ def eval(image, amp):
 
 
 amps = np.linspace(0.00002, 0.002, 10)
+amps = [0.0002]
 
-
-for image in images:
-    for run in range(5):
-        results = Parallel(n_jobs=-1)(delayed(eval)(image, amp) for amp in amps)
-        results = np.array(results).T
-        np.savetxt(f"{image}-{run}", results)
+#for image in tqdm(image_list()[0]):
+# for run in range(1):
+results = Parallel(n_jobs=-1, verbose = 15)(delayed(eval)(image_list()[0], amp) for amp in amps)
+results = np.array(results).T
+print(results)
+    # np.savetxt(f"static/{image}-{run}", results)
 
 
 
