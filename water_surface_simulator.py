@@ -1,6 +1,7 @@
 
 import cv2
 import numpy as np
+from hpatches_images import image_list
 
 
 class WaterSurfaceSimulator:
@@ -35,6 +36,7 @@ class WaterSurfaceSimulator:
         h=1.0,
         d=1.0,
         f=500.0,
+        f_ref=None,
         dt=0.05,
         duration=2.0,
         n_air=1.0,
@@ -48,6 +50,7 @@ class WaterSurfaceSimulator:
         self.h = float(h)
         self.d = float(d)
         self.f = float(f)
+        self.f_ref = float(f if f_ref is None else f_ref)
         self.dt = float(dt)
         self.duration = float(duration)
         self.n_air = float(n_air)
@@ -65,7 +68,7 @@ class WaterSurfaceSimulator:
 
         # Chosen so that flat-water center magnification is close to identity.
         self.eta = self.n_air / self.n_water
-        self.plane_scale = (self.h + self.d * self.eta) / self.f
+        self.plane_scale =(self.h + self.d) / self.f# (self.h + self.d * self.eta) / self.f
 
         self._prepare_camera_grid()
 
@@ -282,8 +285,9 @@ class WaterSurfaceSimulator:
         tau = (-(self.h + self.d) - P[:, 2]) / (T[:, 2] + 1e-12)
         Q = P + tau[:, None] * T
 
-        src_u = Q[:, 0] / self.plane_scale + self.cx
-        src_v = Q[:, 1] / self.plane_scale + self.cy
+        scale = self.f / self.f
+        src_u = scale * (Q[:, 0] / self.plane_scale) + self.cx
+        src_v = scale * (Q[:, 1] / self.plane_scale) + self.cy
 
         return np.column_stack([src_u, src_v])
 
@@ -304,15 +308,16 @@ class WaterSurfaceSimulator:
         tau = (-(self.h + self.d) - P[..., 2]) / (T[..., 2] + 1e-12)
         Q = P + tau[..., None] * T
 
-        map_x = Q[..., 0] / self.plane_scale + self.cx
-        map_y = Q[..., 1] / self.plane_scale + self.cy
+        scale = self.f / self.f
+        map_x = scale * (Q[..., 0] / self.plane_scale) + self.cx
+        map_y = scale * (Q[..., 1] / self.plane_scale) + self.cy
 
         frame = cv2.remap(
             self.image,
             map_x.astype(np.float32),
             map_y.astype(np.float32),
             interpolation=cv2.INTER_LINEAR,
-            borderMode=cv2.BORDER_REFLECT,
+            borderMode=cv2.BORDER_CONSTANT#cv2.BORDER_REFLECT,
         )
         return frame
 
@@ -485,7 +490,8 @@ class WaterSurfaceSimulator:
 
 
 if __name__ == "__main__":
-    img = cv2.imread("/mnt/data/example_input.png")
+    img = cv2.imread("input.jpg")
+    img = image_list()[3]
     if img is None:
         img = np.zeros((400, 600, 3), dtype=np.uint8)
         for y in range(0, 400, 40):
@@ -506,17 +512,18 @@ if __name__ == "__main__":
     sim = WaterSurfaceSimulator(
         image=img,
         h=1.0,
-        d=1.0,
-        f=500.0,
+        d=10.0,
+        f=8000.0,
+        f_ref = 500,
         dt=0.04,
         duration=3.0,
-        n_waves=16,
+        n_waves=0,
         wavelength_px_range=(25, 140),
         amplitude_range=(0.002, 0.015),
         seed=0,
     )
 
-    sim.save_video("/mnt/data/water_surface_simulation.mp4")
+    sim.save_video("water_surface_simulation.mp4")
 
     # Small example for the keypoint distortion function.
     keypoints = np.array([[100.0, 100.0], [300.0, 200.0], [500.0, 300.0]])

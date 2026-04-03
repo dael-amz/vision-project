@@ -2,11 +2,12 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 
-import radial
+import radial as radial
 import srd_sift as srd_sift_mod
 from skimage.feature import SIFT as StockSIFT
 from matching import Keypoints, D_MATCHER
-from test_script import make_division_distortion_func
+from radial import make_division_distortion_func
+import hpatches_images
 
 
 def extract_stock(gray):
@@ -20,11 +21,11 @@ def extract_stock(gray):
 
 
 def extract_srd(gray, xi, use_jacobian_correction=True):
-    desc = srd_sift_mod.SIFT()
+    desc = srd_sift_mod.SIFT(xi = xi)
     desc.use_jacobian_correction = use_jacobian_correction
 
-    desc._create_1d_gaussians(gray.shape, xi)
-    desc._create_jacobians(gray.shape, xi)
+    # desc._create_1d_gaussians(gray.shape, xi)
+    # desc._create_jacobians(gray.shape, xi)
     desc.detect_and_extract(gray, 1)
 
     return Keypoints(
@@ -34,8 +35,8 @@ def extract_srd(gray, xi, use_jacobian_correction=True):
     )
 
 
-def evaluate_pair(origin_kps, distorted_kps, xi, image_shape):
-    dist_func = make_division_distortion_func(xi=xi, image_shape=image_shape)
+def evaluate_pair(origin_kps, distorted_kps, xi, image_shape, mode):
+    dist_func = make_division_distortion_func(xi=xi, image_shape=image_shape, scale_mode=mode)
     matcher = D_MATCHER(
         origin_kps=origin_kps,
         distorted_kps=distorted_kps,
@@ -44,15 +45,20 @@ def evaluate_pair(origin_kps, distorted_kps, xi, image_shape):
     return matcher.compute_stats()
 
 
-def run_ablation(image_path="input.jpg", vals=np.arange(0, 90, 10)):
+def run_ablation(image_path="input.jpg", vals=np.arange(-90, 90, 10)):
     img = cv2.imread(image_path)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = hpatches_images.image_list()[0]
+
+    cv2.imshow("New Image", gray)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
 
     h, w = gray.shape
     norm_scale = max(h, w) / 2
     rad = np.sqrt((h / 2) ** 2 + (w / 2) ** 2)
 
-    xis = vals / (-100.0 * (rad / norm_scale) ** 2)
+    xis = vals / (100.0 * (rad / norm_scale) ** 2)
 
     origin_kps = extract_stock(gray)
 
@@ -70,7 +76,9 @@ def run_ablation(image_path="input.jpg", vals=np.arange(0, 90, 10)):
     }
 
     for xi in xis:
+        print(f"Testing {xi}")
         distorted_gray, _, _ = radial.generate_distorted_image(gray, xi)
+        
 
         # stock SIFT on distorted image
         stock_dist_kps = extract_stock(distorted_gray)
@@ -85,9 +93,9 @@ def run_ablation(image_path="input.jpg", vals=np.arange(0, 90, 10)):
             distorted_gray, xi, use_jacobian_correction=True
         )
 
-        stock_stats = evaluate_pair(origin_kps, stock_dist_kps, xi, gray.shape)
-        srd_noJ_stats = evaluate_pair(origin_kps, srd_noJ_kps, xi, gray.shape)
-        srd_J_stats = evaluate_pair(origin_kps, srd_J_kps, xi, gray.shape)
+        stock_stats = evaluate_pair(origin_kps, stock_dist_kps, xi, gray.shape, mode='srd')
+        srd_noJ_stats = evaluate_pair(origin_kps, srd_noJ_kps, xi, gray.shape, mode='srd')
+        srd_J_stats = evaluate_pair(origin_kps, srd_J_kps, xi, gray.shape, mode='srd')
 
         distortion_pct = -100.0 * xi * (rad / norm_scale) ** 2
         out["distortion_pct"].append(distortion_pct)
@@ -157,5 +165,6 @@ def plot_results(out):
 
 
 if __name__ == "__main__":
+    print("here")
     out = run_ablation("input.jpg")
     plot_results(out)

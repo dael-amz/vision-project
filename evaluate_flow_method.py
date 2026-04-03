@@ -14,14 +14,19 @@ from joblib import Parallel, delayed
 from hpatches_images import image_list
 
 
+# h = 1
+# d = 1
+f = 1
+A = 1.0 / 1.333
 
-def eval(gray, amp):
+
+def eval(gray, amp, h, d):
 
     # Store the statistics of a given run
-    results = np.zeros(13)
+    results = np.zeros(18)
     
     # Create a water simulator with a distribution of waves of amplitude around amp
-    sim = WaterSurfaceSimulator(gray, amplitude_range=(0.7 * amp, 1.3 * amp))
+    sim = WaterSurfaceSimulator(gray, h = h, d = d, amplitude_range=(0.7 * amp, 1.3 * amp))
     if (amp == 0):
         WaterSurfaceSimulator(gray, n_waves=0)
 
@@ -31,10 +36,10 @@ def eval(gray, amp):
     dist_func = sim.make_distortion_func(t=0)
 
 
-    xi = -0.1
-    desc_rd = srd_sift()
-    desc_rd._create_1d_gaussians(dist_gray.shape, xi)
-    (desc_rd._create_jacobians(gray.shape, xi))
+    xi = d * A * (1 - A**2) / (2 * (h + d))
+    desc_rd = srd_sift(xi = xi)
+    # desc_rd._create_1d_gaussians(dist_gray.shape, xi)
+    # (desc_rd._create_jacobians(gray.shape, xi))
     desc_rd.detect_and_extract(dist_gray, 1)
 
     keypoints1 = desc_rd.keypoints
@@ -98,45 +103,69 @@ def eval(gray, amp):
     scales_flow3 = scales3[survivor_mask]
     sift_flow_kps = Keypoints(kp_flow3[:, ::-1], desc_flow3, scales_flow3)
 
-    matcher = D_MATCHER(origin_kps=origin_kps, distorted_kps=distorted_kps, distortion_func=dist_func)
-    out = matcher.compute_stats()
-    results[0] = out['repeatability']
-    results[1] = out['recall']
-    results[2] = out['precision']
 
-    matcher = D_MATCHER(origin_kps=origin_kps, distorted_kps=distorted_flow_kps, distortion_func=dist_func)
-    out = matcher.compute_stats()
-    results[3] = out['repeatability']
-    results[4] = out['recall']
-    results[5] = out['precision']
+    if (len(keypoints2) == 0 or len(keypoints1) == 0):
+        pass
+    else:
+        matcher = D_MATCHER(origin_kps=origin_kps, distorted_kps=distorted_kps, distortion_func=dist_func)
+        out = matcher.compute_stats()
+        results[0] = out['repeatability']
+        results[1] = out['recall']
+        results[2] = out['precision']
 
-    matcher = D_MATCHER(origin_kps=origin_kps, distorted_kps=sift_kps, distortion_func=dist_func)
-    out = matcher.compute_stats()
-    results[6] = out['repeatability']
-    results[7] = out['recall']
-    results[8] = out['precision']
+    if (len(keypoints2) == 0 or len(kp_flow1) == 0):
+        pass
+    else:
+        matcher = D_MATCHER(origin_kps=origin_kps, distorted_kps=distorted_flow_kps, distortion_func=dist_func)
+        out = matcher.compute_stats()
+        results[3] = out['repeatability']
+        results[4] = out['recall']
+        results[5] = out['precision']
 
-    matcher = D_MATCHER(origin_kps=origin_kps, distorted_kps=sift_flow_kps, distortion_func=dist_func)
-    out = matcher.compute_stats()
-    results[9] = out['repeatability']
-    results[10] = out['recall']
-    results[11] = out['precision']
+    if (len(keypoints2) == 0 or len(keypoints3) == 0):
+        pass
+    else:
+        matcher = D_MATCHER(origin_kps=origin_kps, distorted_kps=sift_kps, distortion_func=dist_func)
+        out = matcher.compute_stats()
+        results[6] = out['repeatability']
+        results[7] = out['recall']
+        results[8] = out['precision']
 
-    results[12] = amp
+
+    if (len(keypoints2) == 0 or len(kp_flow3) == 0):
+        pass
+    else:
+        matcher = D_MATCHER(origin_kps=origin_kps, distorted_kps=sift_flow_kps, distortion_func=dist_func)
+        out = matcher.compute_stats()
+        results[9] = out['repeatability']
+        results[10] = out['recall']
+        results[11] = out['precision']
+
+    results[12] = len(keypoints2)
+    results[13] = len(keypoints1)
+    results[14] = len(kp_flow1)
+    results[15] = len(keypoints3)
+    results[16] = len(kp_flow3)
+
+    results[17] = amp
 
     return results
 
 
 
-amps = np.linspace(0.00002, 0.002, 10)
-amps = [0.0002]
-
-for image in tqdm(image_list()[0]):
-    for run in range(1):
-        results = Parallel(n_jobs=-1, verbose = 15)(delayed(eval)(image_list()[0], amp) for amp in amps)
+amps = np.linspace(0.0, 0.002, 10)
+angles = np.linspace(0.01, 1, 10)
+#amps = [0.0002]
+im = 0
+print(len(image_list()))
+for image in tqdm(image_list()):
+    for angle in angles:
+        h = 1
+        d = h * angle
+        results = Parallel(n_jobs=-1, verbose = 15)(delayed(eval)(image, amp, h=h, d = d) for amp in amps)
         results = np.array(results).T
-        np.savetxt(f"static/{image}-{run}", results)
-
+        np.savetxt(f"flow-{im}-{angle}-results", results)
+    im += 1
 
 
 

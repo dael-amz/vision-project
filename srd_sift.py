@@ -2,6 +2,7 @@ import math
 
 from numba import jit
 from numba import int64, float64
+from numba.typed import List
 from numba.experimental import jitclass
 
 from tqdm import tqdm
@@ -105,6 +106,68 @@ def _offsets(grad, hess):
     offset2 = -ac * g0 - bc * g1 - cc * g2
     return np.stack((offset0, offset1, offset2), axis=-1)
 
+
+
+@jit()
+def _apply_kernels(image, idx, n_scales, float_dtype, kernels, r2_indicies):
+
+    octave = np.empty(
+            (n_scales + 3,) + image.shape, dtype=float_dtype
+        )
+
+    octave[0] = image
+
+    #r2_map = self.r2_maps[idx]
+    r2_index = r2_indicies
+
+    h, w = image.shape
+
+    cx0 = (w - 1) / 2.0
+    cy0 = (h - 1) / 2.0
+
+    for s_idx in (range(1, n_scales + 3)):
+        kernel = kernels[s_idx]
+        new_image = np.zeros_like(image)
+        blurred = np.zeros_like(image)
+
+        for i in range(h):
+            for j in range(w):
+                t = cx0 - i
+                row = image[i]
+                r2 = r2_index[i,j]
+                ker = kernel[r2]
+                rad_ker = len(ker) // 2
+
+                l_row = j
+                r_row = w - j - 1
+
+                left = min(l_row, rad_ker)
+                right = min(r_row, rad_ker+1)
+
+                kslice = ker[rad_ker - left: rad_ker + right]
+                convolved = np.sum(row[j - left: j + right] * kslice) / max(np.sum(kslice), 1e-9)
+                new_image[i,j] = convolved
+        for k in range(h):
+            for m in range(w):
+                t = cy0 - m
+                row = new_image[:, m]
+                r2 = r2_index[k,m]
+                ker = kernel[r2]
+                rad_ker = len(ker) // 2
+
+                l_row = k
+                r_row = h - k - 1
+
+                left = min(l_row, rad_ker)
+                right = min(r_row, rad_ker+1)
+
+                kslice = ker[rad_ker - left: rad_ker + right]
+                convolved = np.sum(row[k - left: k + right] * kslice) / max(np.sum(kslice), 1e-9)
+
+                blurred[k,m] = convolved
+
+        octave[s_idx] = blurred
+    return octave
 
 
 # spec = {
@@ -270,6 +333,7 @@ class SIFT(FeatureDetector, DescriptorExtractor):
         n_hist=4,
         n_ori=8,
         use_jacobian_correction = True,
+        xi = 0.0,
     ):
         if upsampling in [1, 2, 4]:
             self.upsampling = upsampling
@@ -305,6 +369,7 @@ class SIFT(FeatureDetector, DescriptorExtractor):
         self.r2_indicies = None
         self.jacobians = None
         self.use_jacobian_correction = use_jacobian_correction
+        self.xi = xi
 
     @property
     def deltas(self):
@@ -340,12 +405,34 @@ class SIFT(FeatureDetector, DescriptorExtractor):
 
 
         def jacobian(x,y,r):
-            J = np.zeros((2,2))
-            J[0,0] = 1 - xi * (r - 8 * (x**2))
-            J[0,1] = 8 * xi * x * y
-            J[1,0] = 8 * xi * x * y
-            J[1,1] = 1 - xi * (r - 8 * (y**2))
-            J = J * (1 + xi * (r)) / (1 - xi * (r))
+            # r = x**2 + y**2
+            # J = np.zeros((2,2))
+            # J[0,0] = 1 - xi * (r - 8 * (x**2))
+            # J[0,1] = 8 * xi * x * y
+            # J[1,0] = 8 * xi * x * y
+            # J[1,1] = 1 - xi * (r - 8 * (y**2))
+            # J = J * (1 + xi * (r)) / (1 - xi * (r))
+
+            r2 = x*x + y*y
+            J = np.empty((2, 2), dtype=np.float64)
+
+            # pref = 1/ (-xi * r2**2 + 1)
+
+            # J[0, 0] = xi * (x**2 - y**2) + 1
+            # J[0, 1] = 2 * xi * x * y
+            # J[1, 0] = 2 * xi * x * y
+            # J[1, 1] = xi * (y**2 - x**2) + 1
+            # J *= pref
+
+            a = 1.0 + xi * r2
+            b = 1.0 - xi * r2
+
+            pref = a / b
+
+            J[0, 0] = pref * (1.0 - xi * r2 + 2.0 * xi * x * x)
+            J[0, 1] = pref * (2.0 * xi * x * y)
+            J[1, 0] = pref * (2.0 * xi * x * y)
+            J[1, 1] = pref * (1.0 - xi * r2 + 2.0 * xi * y * y)
             return J
 
         jacobians = []
@@ -372,8 +459,8 @@ class SIFT(FeatureDetector, DescriptorExtractor):
 
             for i in range(r2_map.shape[0]):
                 for j in range(r2_map.shape[1]):
-                    x = (j - cx0) / norm_scale_octave
-                    y = (j - cy0) / norm_scale_octave
+                    x = (j - cxo) / norm_scale_octave
+                    y = (i - cyo) / norm_scale_octave
                     octave_jacobians[i,j] = (jacobian(x, y, r2_map[i, j]))
 
             jacobians.append(octave_jacobians)
@@ -382,6 +469,11 @@ class SIFT(FeatureDetector, DescriptorExtractor):
         #self.r2_maps = r2_maps
         #self.r2_indicies = r2_indicies
 
+        J0 = self.jacobians[0]
+        # print("mean J00:", np.mean(J0[..., 0, 0]))
+        # print("mean J11:", np.mean(J0[..., 1, 1]))
+        # print("mean |J01|:", np.mean(np.abs(J0[..., 0, 1])))
+        # print("mean |J10|:", np.mean(np.abs(J0[..., 1, 0])))
 
         return jacobians#, r2_maps
 
@@ -468,7 +560,7 @@ class SIFT(FeatureDetector, DescriptorExtractor):
                 for r_idx in range(len(unique_r2)):
                     #if r2 not in flat_kernels[s]:
                     #r_val = r2 * r2_max / (n_bins - 1)
-                    sigma_r = s * abs(1.0 + xi * unique_r2[r_idx])
+                    sigma_r = s * (1.0 + xi * unique_r2[r_idx])
                     scale_kernels[r_idx] = (kernel1d(sigma_r))
                     #kernels[o][s][r2] = flat_kernels[s][r2]
                 octave_kernels.append(scale_kernels)
@@ -681,8 +773,8 @@ class SIFT(FeatureDetector, DescriptorExtractor):
 
         for o in (range(self.n_octaves)):
             #print(type(image), type(self.r2_maps))
-            scalespace.append(self._apply_kernels(image, o, 1000))
-
+            ker = List(List(x) for x in self.kernels[o])
+            scalespace.append(_apply_kernels(image = image, idx = o, n_scales = self.n_scales, float_dtype=self.float_dtype, kernels=ker, r2_indicies=self.r2_indicies[o]))
             if o < self.n_octaves - 1:
                 image = scalespace[-1][self.n_scales][::2, ::2]
         
@@ -875,7 +967,8 @@ class SIFT(FeatureDetector, DescriptorExtractor):
         If your Jacobian is actually the inverse convention, change this to:
             np.linalg.inv(J).swapaxes(-1, -2)
         """
-        return np.swapaxes(J, -1, -2)
+        #J = np.linalg.inv(J)
+        return J#np.swapaxes(J, -1, -2)
 
     def _apply_jacobians_to_patch_gradients(self, octave_idx, rows, cols,
                                             gradient_row, gradient_col):
@@ -905,12 +998,12 @@ class SIFT(FeatureDetector, DescriptorExtractor):
         Apatch = self._gradient_transform_matrix(Jpatch)
 
         # (H, W, 2)
-        g = np.stack((gradient_row, gradient_col), axis=-1)
+        g = np.stack((gradient_col, gradient_row), axis=-1)
 
         # pointwise matrix-vector multiply
         g_corr = np.einsum('...ij,...j->...i', Apatch, g)
 
-        return g_corr[..., 0], g_corr[..., 1]
+        return g_corr[..., 1], g_corr[..., 0]
 
     def _apply_jacobians_to_point_gradients(self, octave_idx, rows, cols,
                                             gradient_row, gradient_col):
@@ -919,9 +1012,21 @@ class SIFT(FeatureDetector, DescriptorExtractor):
         """
         Jpts = self.jacobians[octave_idx][rows, cols]   # (N, 2, 2)
         Apts = self._gradient_transform_matrix(Jpts)
-        g = np.stack((gradient_row, gradient_col), axis=-1)   # (N, 2)
+        g = np.stack((gradient_col, gradient_row), axis=-1)   # (N, 2)
         g_corr = np.einsum('nij,nj->ni', Apts, g)
-        return g_corr[:, 0], g_corr[:, 1]
+        return g_corr[:, 1], g_corr[:, 0]
+
+    def _local_rd_scale_factor(self, octave_idx, row, col, cyx):
+        """
+        Returns a(rows, cols) = 1 + xi * r^2 in octave-normalized coordinates.
+        rows, cols can be arrays.
+        """
+        #rr, cc = np.broadcast_arrays(rows, cols)
+        #r2 = self.r2_maps[octave_idx][rr, cc]
+        norm_scale_octave = self.norm_scale / (2 ** octave_idx)
+        row = (row - cyx[0]) / norm_scale_octave
+        col = (col - cyx[1]) / norm_scale_octave
+        return 1.0 + self.xi * (row**2 + col**2)
 
     def _compute_orientation(
         self, positions_oct, scales_oct, sigmas_oct, octaves, gaussian_scalespace
@@ -936,6 +1041,7 @@ class SIFT(FeatureDetector, DescriptorExtractor):
         keypoint_octave = []
         orientations = np.zeros_like(sigmas_oct, dtype=self.float_dtype)
         key_count = 0
+        #print("TYBE", octaves.shape)
         for o, (octave, delta) in enumerate(zip(gaussian_scalespace, self.deltas)):
             # gradient = np.gradient(octave)
             # for i in range(gradient[0].shape[0]):
@@ -944,7 +1050,8 @@ class SIFT(FeatureDetector, DescriptorExtractor):
             #         J = self.jacobians[o][i, j]
             #         vec = J @ vec
             #         gradient[0][i,j] = vec[0]
-            #         gradient[1][i,j] = vec[1]   
+            #         gradient[1][i,j] = vec[1]  
+            #print("OCTSVE", octave.shape)
             gradient_space.append(np.gradient(octave))
 
             in_oct = octaves == o
@@ -956,6 +1063,7 @@ class SIFT(FeatureDetector, DescriptorExtractor):
 
             oshape = octave.shape[:2]
             # convert to octave's dimensions
+            #print("YX", positions)
             yx = positions / delta
             sigma = sigmas / delta
 
@@ -988,19 +1096,39 @@ class SIFT(FeatureDetector, DescriptorExtractor):
                         o, r, c, gradient_row, gradient_col
                     )
 
-                r = r.astype(self.float_dtype, copy=False)
-                c = c.astype(self.float_dtype, copy=False)
-                r -= yx[k, 0]
-                c -= yx[k, 1]
-
                 #print("Gradients: ", gradient_row.shape, gradient_col.shape)
                 # gradient magnitude and angles
                 magnitude = np.sqrt(np.square(gradient_row) + np.square(gradient_col))
                 theta = np.mod(np.arctan2(gradient_col, gradient_row), 2 * np.pi)
+                #print(r + yx[k,0], c+yx[k,1])
+                if self.use_jacobian_correction:
+                    cx = (octave.shape[1] - 1) / 2.0
+                    cy = (octave.shape[0] - 1) / 2.0
+                    cyx = np.array([cy, cx])
+                    a_rc = self._local_rd_scale_factor(o, yx[k, 0] , yx[k, 1], cyx)
+                    sigma_w = self.lambda_ori * sigma[k] * a_rc
+                else:
+                    sigma_w = self.lambda_ori * sigma[k]
+
+                # if self.use_jacobian_correction and k == 0 and o == 0:
+                #     print("mean |grad before| =", np.mean(np.sqrt(gradient_space[o][0][r, c, scales[k]]**2 +
+                #                                                 gradient_space[o][1][r, c, scales[k]]**2)))
+                #     print("mean |grad after|  =", np.mean(np.sqrt(gradient_row**2 + gradient_col**2)))
+                #     ratio = np.mean(np.sqrt(gradient_row**2 + gradient_col**2)) / \
+                #     np.mean(np.sqrt(gradient_space[o][0][r, c, scales[k]]**2 +
+                #                     gradient_space[o][1][r, c, scales[k]]**2))
+                #     print("grad magnitude ratio =", ratio)
+
+                #print(r, c)
+                r = r.astype(self.float_dtype, copy=False)
+                c = c.astype(self.float_dtype, copy=False)
+                r -= yx[k, 0]
+                c -= yx[k, 1]
+                #print(r, c)
 
                 # more weight to center values
                 kernel = np.exp(
-                    np.divide(r * r + c * c, -2 * (self.lambda_ori * sigma[k]) ** 2)
+                    np.divide(r * r + c * c, -2 * (sigma_w) ** 2)
                 )
 
                 # fill the histogram
@@ -1082,6 +1210,7 @@ class SIFT(FeatureDetector, DescriptorExtractor):
             numbers = key_numbers[in_oct]
 
             dim = gradient[0].shape[:2]
+            #print(dim)
             center_pos = positions / delta
             sigma = sigmas / delta
 
@@ -1132,7 +1261,15 @@ class SIFT(FeatureDetector, DescriptorExtractor):
                     )
                 # compute the (relative) gradient orientation
                 theta = np.arctan2(gradient_col, gradient_row) - ori
-                lam_sig = self.lambda_descr * float(sigma[k])
+
+                if self.use_jacobian_correction:
+                    cx = (dim[1] - 1) / 2.0
+                    cy = (dim[0] - 1) / 2.0
+                    cyx = np.array([cy, cx])
+                    a_rc = self._local_rd_scale_factor(o, center_pos[k, 0], center_pos[k, 1], cyx)
+                    lam_sig = self.lambda_descr * float(sigma[k]) * a_rc
+                else:
+                    lam_sig = self.lambda_descr * float(sigma[k])
                 # Gaussian weighted kernel magnitude
                 kernel = np.exp((r_norm * r_norm + c_norm * c_norm) / (-2 * lam_sig**2))
                 magnitude = (
@@ -1238,6 +1375,8 @@ class SIFT(FeatureDetector, DescriptorExtractor):
         if (mode == 0):
             gaussian_scalespace = self._create_scalespace(image)
         if (mode == 1):
+            self._create_1d_gaussians(image.shape, xi=self.xi)
+            self._create_jacobians(image.shape, self.xi)
             gaussian_scalespace = self._create_rd_scalespace(image)
 
         dog_scalespace = [np.diff(layer, axis=2) for layer in gaussian_scalespace]

@@ -1,7 +1,7 @@
 import cv2
 import srd_sift as srd_sift
 from skimage.feature import SIFT, match_descriptors, plot_matched_features
-import Project.unused.radial as radial
+import radial as radial
 import matplotlib.pyplot as plt
 from matching import Keypoints, D_MATCHER
 import numpy as np
@@ -100,32 +100,32 @@ norm_scale = max(h, w) / 2
 rad = np.sqrt((h / 2)**2 + (w / 2)**2)
 
 
-def eval(amp):
-    xi = -0.109
+def eval(xi):
+    #xi = -0.109
     results = np.zeros(7)
 
-    H = 1.0
-    d = 1.0
-    n_water = 1.3333
-    n_air = 1.0
-    A = n_air / n_water
+    # H = 1.0
+    # d = 1.0
+    # n_water = 1.3333
+    # n_air = 1.0
+    # A = n_air / n_water
     
-    sim = WaterSurfaceSimulator(gray,h=H, d=d, f=1, amplitude_range=(0.002 * amp, 0.02 * amp))
-    if (amp == 0):
-        WaterSurfaceSimulator(gray, n_waves=0)
+    # sim = WaterSurfaceSimulator(gray,h=H, d=d, f=1, amplitude_range=(0.002 * amp, 0.02 * amp))
+    # if (amp == 0):
+    #     WaterSurfaceSimulator(gray, n_waves=0)
 
-    effecitve_distortion =  amp#- 100 * xi * (rad / norm_scale)**2
-    #dist_gray, _, _ = radial.generate_distorted_image(gray, xi)
-    frames = sim.generate_frames()
-    dist_gray = frames[10]
-    time = 0.04 * 10
+    effecitve_distortion =  - 100 * xi * (rad / norm_scale)**2
+    dist_gray, _, _ = radial.generate_distorted_image(gray, xi)
+    # frames = sim.generate_frames()
+    # dist_gray = frames[10]
+    # time = 0.04 * 10
 
-    dist_func = sim.make_distortion_func(t=time)
+    #dist_func = sim.make_distortion_func(t=time)
     print("Progress 1")
 
     desc_rd = srd_sift.SIFT()
-    desc_rd._create_1d_water_gaussians(dist_gray.shape, h=H, d=d, A=A)
-    #(desc_rd._create_jacobians(gray.shape, xi))
+    desc_rd._create_1d_gaussians(dist_gray.shape, xi=xi)
+    (desc_rd._create_jacobians(gray.shape, xi))
     desc_rd.detect_and_extract(dist_gray, 1)
 
     keypoints1 = desc_rd.keypoints
@@ -153,7 +153,7 @@ def eval(amp):
     s_kps = Keypoints(keypoints3[:, ::-1], descriptors3, scales3)
     print("Progress 4")
 
-    #dist_func = make_division_distortion_func(xi=xi, image_shape=gray.shape)
+    dist_func = make_division_distortion_func(xi=xi, image_shape=gray.shape)
 
     matcher = D_MATCHER(origin_kps=origin_kps, distorted_kps=distorted_kps, distortion_func=dist_func)
     out = matcher.compute_stats()
@@ -173,25 +173,25 @@ def eval(amp):
 
 
 
-vals = np.arange(0, 90, 10)
-xis = vals / (- 100 * (rad / norm_scale)**2)
+# vals = np.arange(0, 90, 10)
+# xis = vals / (- 100 * (rad / norm_scale)**2)
 
-amps = [0, 1, 2, 3, 4, 5, 6, 7, 8]
+# # amps = [0, 1, 2, 3, 4, 5, 6, 7, 8]
 
-results = np.zeros((2, len(vals)))
+# # results = np.zeros((2, len(vals)))
 
-i = 0
+# # i = 0
 
-results = eval(amps[1])#Parallel(n_jobs=-1)(delayed(eval)(amp) for amp in amps)
-results = np.array(results).T
-print("rResults", results.T)
+# results = eval(xis[1])#Parallel(n_jobs=-1)(delayed(eval)(amp) for amp in amps)
+# results = np.array(results).T
+# print("rResults", results.T)
 
-plt.plot(results[6], results[0], label = f'sRD-SIFT ')
-plt.plot(results[6], results[3], label = f'SIFT ')
-plt.xlabel('distortion')
-plt.ylabel('repeatability')
-plt.title('sRD-SIFT vs SIFT')
-plt.legend()
-print("Progress 5")
+# plt.plot(results[6], results[0], label = f'sRD-SIFT ')
+# plt.plot(results[6], results[3], label = f'SIFT ')
+# plt.xlabel('distortion')
+# plt.ylabel('repeatability')
+# plt.title('sRD-SIFT vs SIFT')
+# plt.legend()
+# print("Progress 5")
 
-plt.show()
+# plt.show()

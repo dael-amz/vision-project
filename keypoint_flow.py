@@ -39,7 +39,7 @@ class ForwardBackwardFlowFilter:
         max_level=3,
         max_iter=30,
         eps=1e-3,
-        fb_error_threshold=1.5 * 3,
+        fb_error_threshold=1.5 * 20,
         min_successful_steps=1,
     ):
         self.lk_params = dict(
@@ -164,111 +164,111 @@ class ForwardBackwardFlowFilter:
         }
     
 
-# frames: list of grayscale images
-# keypoints0: ndarray of shape (N, 2), from your srd_sift detector on frame 0
-img = cv2.imread("input.jpg")
-gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+# # frames: list of grayscale images
+# # keypoints0: ndarray of shape (N, 2), from your srd_sift detector on frame 0
+# img = cv2.imread("input.jpg")
+# gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-sim = WaterSurfaceSimulator(gray, amplitude_range=(0.00002, 0.00004), n_waves=10)
-frames = sim.generate_frames()
+# sim = WaterSurfaceSimulator(gray, amplitude_range=(0.00002, 0.00004), n_waves=10)
+# frames = sim.generate_frames()
 
-desc = SIFT()
-desc.detect_and_extract(gray)
+# desc = SIFT()
+# desc.detect_and_extract(gray)
 
-# skimage SIFT keypoints are usually (row, col), so convert to (x, y)
-keypoints0 = desc.keypoints[:, ::-1].astype(np.float32)
+# # skimage SIFT keypoints are usually (row, col), so convert to (x, y)
+# keypoints0 = desc.keypoints[:, ::-1].astype(np.float32)
 
-fb_filter = ForwardBackwardFlowFilter(
-    win_size=(21, 21),
-    max_level=3,
-    fb_error_threshold=1.5,
-    min_successful_steps=len(frames) - 1,
-)
+# fb_filter = ForwardBackwardFlowFilter(
+#     win_size=(21, 21),
+#     max_level=3,
+#     fb_error_threshold=1.5,
+#     min_successful_steps=len(frames) - 1,
+# )
 
-out = fb_filter.filter_points(frames, keypoints0)
+# out = fb_filter.filter_points(frames, keypoints0)
 
-survivor_points0 = out["survivor_points0"]
-survivor_mask = out["survivor_mask"]
-tracks = out["tracks"]
-mean_fb_errors = out["mean_fb_errors"]
+# survivor_points0 = out["survivor_points0"]
+# survivor_mask = out["survivor_mask"]
+# tracks = out["tracks"]
+# mean_fb_errors = out["mean_fb_errors"]
 
-print("tracks shape:", tracks.shape)
-print("frame 0 valid:", np.sum(~np.isnan(tracks[:, 0, 0])))
-if tracks.shape[1] > 1:
-    print("frame 1 valid:", np.sum(~np.isnan(tracks[:, 1, 0])))
-    print("mean displacement 0->1:",
-          np.nanmean(np.linalg.norm(tracks[:, 1, :] - tracks[:, 0, :], axis=1)))
+# print("tracks shape:", tracks.shape)
+# print("frame 0 valid:", np.sum(~np.isnan(tracks[:, 0, 0])))
+# if tracks.shape[1] > 1:
+#     print("frame 1 valid:", np.sum(~np.isnan(tracks[:, 1, 0])))
+#     print("mean displacement 0->1:",
+#           np.nanmean(np.linalg.norm(tracks[:, 1, :] - tracks[:, 0, :], axis=1)))
 
-print(survivor_points0.shape)
+# print(survivor_points0.shape)
 
-dist_func = sim.make_distortion_func(t=0.0)
+# dist_func = sim.make_distortion_func(t=0.0)
 
 
-sif = SIFT()
-sif.detect_and_extract(gray)
-kp0 = sif.keypoints
-desc0 = sif.descriptors
-scales0 = sif.sigmas
-origin_kps = Keypoints(kp0[:, ::-1], desc0, scales0)
-print(len(kp0))
+# sif = SIFT()
+# sif.detect_and_extract(gray)
+# kp0 = sif.keypoints
+# desc0 = sif.descriptors
+# scales0 = sif.sigmas
+# origin_kps = Keypoints(kp0[:, ::-1], desc0, scales0)
+# print(len(kp0))
 
-kp1 = desc.keypoints[survivor_mask]
-desc1 = desc.descriptors[survivor_mask]
-scales1 = desc.sigmas[survivor_mask]
-distorted_kps = Keypoints(kp1[:, ::-1], desc1, scales1)
-print(len(kp1))
+# kp1 = desc.keypoints[survivor_mask]
+# desc1 = desc.descriptors[survivor_mask]
+# scales1 = desc.sigmas[survivor_mask]
+# distorted_kps = Keypoints(kp1[:, ::-1], desc1, scales1)
+# print(len(kp1))
 
-matcher =  matcher = D_MATCHER(origin_kps=origin_kps, distorted_kps=distorted_kps, distortion_func=dist_func)
-out = matcher.compute_stats()
-print(out['repeatability'], out['recall'], out['precision'])
+# matcher =  matcher = D_MATCHER(origin_kps=origin_kps, distorted_kps=distorted_kps, distortion_func=dist_func)
+# out = matcher.compute_stats()
+# print(out['repeatability'], out['recall'], out['precision'])
 
-kp2 = desc.keypoints
-desc2 = desc.descriptors
-scales2 = desc.sigmas
-distorted_kps = Keypoints(kp2[:, ::-1], desc2, scales2)
-matcher =  matcher = D_MATCHER(origin_kps=origin_kps, distorted_kps=distorted_kps, distortion_func=dist_func)
-out = matcher.compute_stats()
-print(out['repeatability'], out['recall'], out['precision'])
+# kp2 = desc.keypoints
+# desc2 = desc.descriptors
+# scales2 = desc.sigmas
+# distorted_kps = Keypoints(kp2[:, ::-1], desc2, scales2)
+# matcher =  matcher = D_MATCHER(origin_kps=origin_kps, distorted_kps=distorted_kps, distortion_func=dist_func)
+# out = matcher.compute_stats()
+# print(out['repeatability'], out['recall'], out['precision'])
 
-fig, ax = plt.subplots()
+# fig, ax = plt.subplots()
 
-# show first image
-im = ax.imshow(frames[0], cmap="gray", animated=True)
+# # show first image
+# im = ax.imshow(frames[0], cmap="gray", animated=True)
 
-# initialize scatter with only valid points
-pts0 = tracks[:, 0, :]
-valid0 = ~np.isnan(pts0).any(axis=1)
-scat = ax.scatter(pts0[valid0, 0], pts0[valid0, 1], s=10, c="r",)# animated=True)
+# # initialize scatter with only valid points
+# pts0 = tracks[:, 0, :]
+# valid0 = ~np.isnan(pts0).any(axis=1)
+# scat = ax.scatter(pts0[valid0, 0], pts0[valid0, 1], s=10, c="r",)# animated=True)
 
-ax.set_xlim(0, frames[0].shape[1])
-ax.set_ylim(frames[0].shape[0], 0)
+# ax.set_xlim(0, frames[0].shape[1])
+# ax.set_ylim(frames[0].shape[0], 0)
 
-def init():
-    im.set_data(frames[0])
-    pts = tracks[:, 0, :]
-    valid = ~np.isnan(pts).any(axis=1)
-    scat.set_offsets(pts[valid])
-    return im, scat
+# def init():
+#     im.set_data(frames[0])
+#     pts = tracks[:, 0, :]
+#     valid = ~np.isnan(pts).any(axis=1)
+#     scat.set_offsets(pts[valid])
+#     return im, scat
 
-def update(i):
-    im.set_data(frames[i])
-    pts = tracks[:, i, :]
-    valid = ~np.isnan(pts).any(axis=1)
-    scat.set_offsets(pts[valid])
-    ax.set_title(f"frame {i}")
-    return im, scat
+# def update(i):
+#     im.set_data(frames[i])
+#     pts = tracks[:, i, :]
+#     valid = ~np.isnan(pts).any(axis=1)
+#     scat.set_offsets(pts[valid])
+#     ax.set_title(f"frame {i}")
+#     return im, scat
 
-ani = animation.FuncAnimation(
-    fig,
-    update,
-    frames=len(frames),
-    init_func=init,
-    interval=200,
-    blit=False,   # important for debugging
-    repeat=True,
-)
+# ani = animation.FuncAnimation(
+#     fig,
+#     update,
+#     frames=len(frames),
+#     init_func=init,
+#     interval=200,
+#     blit=False,   # important for debugging
+#     repeat=True,
+# )
 
-plt.show()
+# plt.show()
 
-print("initial keypoints:", len(keypoints0))
-print("surviving keypoints:", len(survivor_points0))
+# print("initial keypoints:", len(keypoints0))
+# print("surviving keypoints:", len(survivor_points0))

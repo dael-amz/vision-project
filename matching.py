@@ -121,26 +121,49 @@ class D_MATCHER():
 
         return self.s_true
 
-    def true_matches(self):
+    def true_matches(self, one_to_one = True):
 
-        distorted_idx = self.matches[:, 1]
-        origin_idx = self.matches[:, 0]
 
-        distorted_loc = self.distorted_kps.loc()[distorted_idx]
-        origin_loc = self.origin_kps.loc()[origin_idx]
+        s_true_set = set(map(tuple, self.s_true))
+        keep = np.array([tuple(m) in s_true_set for m in self.matches], dtype=bool)
+        self.M_true = self.matches[keep]
+        #print("Matches: ", len(self.matches), len(self.M_true))
+        # m_true = []
 
-        distorted_scales = self.distorted_kps.sc()[distorted_idx]
-        origin_scales = self.origin_kps.sc()[origin_idx]
+        # for match in self.matches:
+        #     for t_match in self.s_true:
+        #         if match[0] == t_match[0] and match[1] == t_match[1]:
+        #             m_true.append(match)
 
-        dist_frame_origin_loc, dist_frame_origin_scales = self.distortion_func(origin_loc, origin_scales)
+        # self.M_true = np.array(m_true)
 
-        diff = dist_frame_origin_loc- distorted_loc
-        norms = np.linalg.norm(diff, axis = 1)
+        # distorted_idx = self.matches[:, 1]
+        # origin_idx = self.matches[:, 0]
 
-        scales = self.compare_scale(dist_frame_origin_scales, distorted_scales)
+        # distorted_loc = self.distorted_kps.loc()[distorted_idx]
+        # origin_loc = self.origin_kps.loc()[origin_idx]
 
-        c_matrix = (norms <= self.pos_thresh)# & scales
-        self.M_true = self.matches[c_matrix]
+        # distorted_scales = self.distorted_kps.sc()[distorted_idx]
+        # origin_scales = self.origin_kps.sc()[origin_idx]
+
+        # dist_frame_origin_loc, dist_frame_origin_scales = self.distortion_func(origin_loc, origin_scales)
+
+        # diff = dist_frame_origin_loc- distorted_loc
+        # norms = np.linalg.norm(diff, axis = 1)
+
+        # scales = self.compare_scale(dist_frame_origin_scales, distorted_scales)
+
+        # c_matrix = (norms <= self.pos_thresh) & scales
+        # row, col = np.where(c_matrix)
+
+        # q_idx = row.astype(int)
+        # t_idx = col.astype(int)
+        # score = norms[row, col]
+
+        # if one_to_one:
+        #     q_idx, t_idx, score = self.unique_assignment(q_idx, t_idx, score)
+
+        # self.M_true = np.column_stack((q_idx, t_idx))#self.matches[c_matrix]
 
         return self.M_true
     
@@ -151,10 +174,15 @@ class D_MATCHER():
         self.compute_s_true()
         self.true_matches()
 
+        s_len = max(1, len(self.s_true))
+        M_len = max(1, len(self.M_true))
+        match_len = max(1, len(self.matches))
+
+
         result = {
-            'repeatability': len(self.s_true) / min(len(self.distorted_kps.loc()), len(self.origin_kps.loc())),
-            'recall': len(self.M_true) / len(self.s_true),
-            'precision': len(self.M_true) / len(self.matches)
+            'repeatability': len(self.s_true) / max(1, min(len(self.distorted_kps.loc()), len(self.origin_kps.loc()))),
+            'recall': M_len / s_len,
+            'precision': M_len / match_len
         }
     
         return result
