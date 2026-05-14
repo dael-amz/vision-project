@@ -2,12 +2,12 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 
-import radial as radial
-import srd_sift as srd_sift_mod
+import Project.radial as radial
+import Project.srd_sift as srd_sift_mod
 from skimage.feature import SIFT as StockSIFT
-from matching import Keypoints, D_MATCHER
-from radial import make_division_distortion_func
-import hpatches_images
+from Project.matching import Keypoints, D_MATCHER
+from Project.radial import make_division_distortion_func
+import Project.hpatches_images as hpatches_images
 
 
 def extract_stock(gray):

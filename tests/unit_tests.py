@@ -1,10 +1,10 @@
 import cv2
 import numpy as np
-from srd_sift import SIFT as srd_sift
+from Project.srd_sift import SIFT as srd_sift
 from skimage.feature import SIFT, match_descriptors, plot_matched_features
 import matplotlib.pyplot as plt
-from radial import generate_distorted_image, make_division_distortion_func
-from matching import Keypoints, D_MATCHER
+from Project.radial import generate_distorted_image, make_division_distortion_func
+from Project.matching import Keypoints, D_MATCHER
 
 xi = -0.9
 

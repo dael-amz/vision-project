@@ -1,7 +1,7 @@
 import cv2
-from water_surface_simulator import WaterSurfaceSimulator
+from Project.water_surface_simulator import WaterSurfaceSimulator
 
-from water_surface_simulator import WaterSurfaceSimulator
+from Project.water_surface_simulator import WaterSurfaceSimulator
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt

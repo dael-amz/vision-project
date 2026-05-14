@@ -1,12 +1,12 @@
 import cv2
-import srd_sift as srd_sift
+import Project.srd_sift as srd_sift
 from skimage.feature import SIFT, match_descriptors, plot_matched_features
-import radial as radial
+import Project.radial as radial
 import matplotlib.pyplot as plt
-from matching import Keypoints, D_MATCHER
+from Project.matching import Keypoints, D_MATCHER
 import numpy as np
 from joblib import Parallel, delayed
-from water_surface_simulator import WaterSurfaceSimulator
+from Project.water_surface_simulator import WaterSurfaceSimulator
 
 img = cv2.imread("input.jpg")
 gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)

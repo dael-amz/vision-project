@@ -1,17 +1,17 @@
 from dataclasses import dataclass
 from typing import List, Optional
-from water_surface_simulator import WaterSurfaceSimulator
+from Project.water_surface_simulator import WaterSurfaceSimulator
 from skimage.feature import SIFT
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
-from matching import Keypoints, D_MATCHER
+from Project.matching import Keypoints, D_MATCHER
 import cv2
 import numpy as np
-from keypoint_flow import FBFlowTrackResult, ForwardBackwardFlowFilter
+from Project.keypoint_flow import FBFlowTrackResult, ForwardBackwardFlowFilter
 from tqdm import tqdm
-from srd_sift import SIFT as srd_sift
+from Project.srd_sift import SIFT as srd_sift
 from joblib import Parallel, delayed
-from hpatches_images import image_list
+from Project.hpatches_images import image_list
 
 
 # h = 1

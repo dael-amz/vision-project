@@ -1,7 +1,7 @@
 
 import cv2
 import numpy as np
-from hpatches_images import image_list
+from Project.hpatches_images import image_list
 
 
 class WaterSurfaceSimulator:
