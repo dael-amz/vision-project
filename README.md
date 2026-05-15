@@ -35,6 +35,8 @@ The main experiment ran 600 trials across 10 distortion settings.
 
 The improvement was strongest in the high-distortion regime.
 
+<img width="529" height="554" alt="image" src="https://github.com/user-attachments/assets/cac8d1b7-8cbd-49d6-9a79-781120f2e651" />
+
 ## Method Demo
 
 First frame contains all keypoints detected using rdSIFT. Following frames are only the keypoints that survived forwards-backwards optical-flow pruning.
@@ -44,18 +46,19 @@ https://github.com/user-attachments/assets/16237e54-096f-41c3-83c2-fe6e547a2500
 ## Repository Structure
 
 ```text
-Project/
+project/
   water_surface_simulator.py   # dynamic refractive water simulator
   radial.py                    # radial distortion model
   srd_sift.py                  # modified SIFT implementation
   keypoint_flow.py             # forward-backward optical-flow pruning
   matching.py                  # repeatability / recall / precision metrics
+  hpatches_images.py           # loading testing set
 
 scripts/
   run_flow_eval.py             # main dynamic-water evaluation
   run_static_eval.py           # static radial-distortion evaluation
-  make_demo_video.py           # generate a distortion demo video
-  plot_results.py              # aggregate and plot experiment results 
+  plot_results.py              # aggregate and plot experiment results
+  approx_diff.py               # estimate error between true distortion and radial model
 '''
 
 
