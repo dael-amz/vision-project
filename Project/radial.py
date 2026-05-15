@@ -4,10 +4,10 @@ import cv2
 import math
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple, Literal
-from Project.srd_sift import SIFT
+from project.srd_sift import SIFT
 import matplotlib.pyplot as plt
 import scipy.ndimage as ndi
-import Project.hpatches_images as hp
+import project.hpatches_images as hp
 
 Array = np.ndarray
 

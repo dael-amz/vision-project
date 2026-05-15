@@ -1,10 +1,10 @@
 from dataclasses import dataclass
 from typing import List, Optional
-from Project.water_surface_simulator import WaterSurfaceSimulator
+from project.water_surface_simulator import WaterSurfaceSimulator
 from skimage.feature import SIFT
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
-from Project.matching import Keypoints, D_MATCHER
+from project.matching import Keypoints, D_MATCHER
 
 
 import cv2

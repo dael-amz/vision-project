@@ -1,15 +1,15 @@
 import cv2
-import Project.srd_sift as srd_sift
+import project.srd_sift as srd_sift
 from skimage.feature import SIFT, match_descriptors, plot_matched_features
-import Project.radial as radial
+import project.radial as radial
 import matplotlib.pyplot as plt
-from Project.matching import Keypoints, D_MATCHER
+from project.matching import Keypoints, D_MATCHER
 import numpy as np
 from joblib import Parallel, delayed
-from Project.water_surface_simulator import WaterSurfaceSimulator
+from project.water_surface_simulator import WaterSurfaceSimulator
 import numpy as np
 from typing import Optional, Tuple, Literal
-from Project.hpatches_images import image_list
+from project.hpatches_images import image_list
 from tqdm import tqdm
 
 # h = 80
