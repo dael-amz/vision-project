@@ -35,6 +35,12 @@ The main experiment ran 600 trials across 10 distortion settings.
 
 The improvement was strongest in the high-distortion regime.
 
+## Method Demo
+
+First frame contains all keypoints detected using rdSIFT. Following frames are only the keypoints that survived forwards-backwards optical-flow pruning.
+
+https://github.com/user-attachments/assets/16237e54-096f-41c3-83c2-fe6e547a2500
+
 ## Repository Structure
 
 ```text
@@ -51,7 +57,5 @@ scripts/
   make_demo_video.py           # generate a distortion demo video
   plot_results.py              # aggregate and plot experiment results 
 '''
-## Repository Structure
 
-https://github.com/user-attachments/assets/16237e54-096f-41c3-83c2-fe6e547a2500
 
